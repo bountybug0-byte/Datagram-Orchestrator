@@ -255,15 +255,16 @@ def invoke_auto_accept():
 
 def validate_repo_access(repo_path: str, token: str) -> Dict:
     """Check if repo exists and has required permissions"""
-    result = run_gh_api(f"api repos/{repo_path} --jq '.permissions.admin,.permissions.push'", token, max_retries=1)
+    result = run_gh_api(f"api repos/{repo_path}", token, max_retries=1)
     if result["success"]:
         try:
-            permissions = result["output"].strip().split('\n')
-            has_admin = permissions[0].lower() == "true" if len(permissions) > 0 else False
-            has_push = permissions[1].lower() == "true" if len(permissions) > 1 else False
+            repo_data = json.loads(result["output"])
+            permissions = repo_data.get("permissions", {})
+            has_admin = permissions.get("admin", False)
+            has_push = permissions.get("push", False)
             return {"success": True, "has_admin": has_admin, "has_push": has_push}
-        except:
-            return {"success": False, "error": "Invalid response"}
+        except (json.JSONDecodeError, KeyError) as e:
+            return {"success": False, "error": f"Parse error: {str(e)}"}
     return {"success": False, "error": result["error"]}
 
 def enable_actions(repo_path: str, token: str) -> Dict:
