@@ -1,0 +1,345 @@
+name: Datagram 24/7 Multi-Node Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_restart:
+        description: 'Force restart all nodes'
+        required: false
+        type: boolean
+        default: false
+  
+  schedule:
+    - cron: '0 */5 * * *'
+  
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/datagram-runner.yml'
+
+env:
+  NODE_VERSION: 'latest'
+  RESTART_DELAY: 10
+  MAX_RETRIES: 100
+
+concurrency:
+  group: datagram-${{ github.ref }}-${{ github.run_number }}
+  cancel-in-progress: false
+
+jobs:
+  # ============================================
+  # JOB 1: Setup Matrix dari Secret
+  # ============================================
+  setup-matrix:
+    name: 🔧 Setup Multi-Account Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.parse.outputs.matrix }}
+      total: ${{ steps.parse.outputs.total }}
+      timestamp: ${{ steps.parse.outputs.timestamp }}
+    
+    steps:
+      - name: Parse API Keys
+        id: parse
+        run: |
+          echo "🔍 Parsing DATAGRAM_API_KEYS secret..."
+          
+          # Support multiple formats:
+          # 1. Comma-separated: key1,key2,key3
+          # 2. Newline-separated
+          # 3. JSON array: ["key1","key2","key3"]
+          
+          KEYS='${{ secrets.DATAGRAM_API_KEYS }}'
+          
+          if [ -z "$KEYS" ]; then
+            echo "❌ ERROR: DATAGRAM_API_KEYS secret is empty!"
+            exit 1
+          fi
+          
+          # Detect format and convert to JSON array
+          if [[ "$KEYS" == "["* ]]; then
+            # Already JSON
+            KEYS_ARRAY="$KEYS"
+          else
+            # Convert comma/newline to JSON array
+            KEYS_ARRAY=$(echo "$KEYS" | tr ',' '\n' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          fi
+          
+          # Validate keys
+          COUNT=$(echo "$KEYS_ARRAY" | jq 'length')
+          
+          if [ "$COUNT" -eq 0 ]; then
+            echo "❌ ERROR: No valid API keys found!"
+            exit 1
+          fi
+          
+          # Create matrix with index for better tracking
+          MATRIX=$(jq -n --argjson keys "$KEYS_ARRAY" '{
+            include: [
+              range(0; $keys | length) | {
+                index: . + 1,
+                api_key: $keys[.]
+              }
+            ]
+          }')
+          
+          TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "total=$COUNT" >> $GITHUB_OUTPUT
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+          
+          echo "✅ Successfully parsed $COUNT API keys"
+          echo "⏰ Timestamp: $TIMESTAMP"
+          
+      - name: Validate Matrix
+        run: |
+          echo "📊 Matrix Configuration:"
+          echo '${{ steps.parse.outputs.matrix }}' | jq .
+
+  # ============================================
+  # JOB 2: Run Datagram Nodes (Parallel)
+  # ============================================
+  run-nodes:
+    name: 🚀 Node #${{ matrix.index }}
+    needs: setup-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    
+    strategy:
+      max-parallel: 50
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
+    
+    steps:
+      - name: 🖥️  System Info
+        run: |
+          echo "════════════════════════════════════════════════"
+          echo "🚀 DATAGRAM NODE STARTUP"
+          echo "════════════════════════════════════════════════"
+          echo "📍 Node Index    : ${{ matrix.index }}"
+          echo "🔢 Total Nodes   : ${{ needs.setup-matrix.outputs.total }}"
+          echo "⏰ Started at    : ${{ needs.setup-matrix.outputs.timestamp }}"
+          echo "🖥️  Runner OS     : $(uname -a)"
+          echo "💾 Memory        : $(free -h | grep Mem | awk '{print $2" total, "$3" used, "$7" available"}')"
+          echo "💿 Disk          : $(df -h / | tail -1 | awk '{print $2" total, "$3" used, "$4" available"}')"
+          echo "🔑 API Key       : ${API_KEY:0:8}...${API_KEY: -6}"
+          echo "════════════════════════════════════════════════"
+        env:
+          API_KEY: ${{ matrix.api_key }}
+
+      - name: 📦 Install Datagram CLI
+        run: |
+          echo "📥 Downloading Datagram CLI..."
+          
+          DOWNLOAD_URL="https://github.com/Datagram-Group/datagram-cli-release/releases/latest/download/datagram-cli-x86_64-linux"
+          
+          # Download with retry
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if wget -q --show-progress "$DOWNLOAD_URL" -O datagram-cli; then
+              echo "✅ Download successful"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⚠️  Download failed, retry $RETRY_COUNT/$MAX_RETRIES..."
+                sleep 5
+              else
+                echo "❌ Download failed after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            fi
+          done
+          
+          # Install
+          sudo mv datagram-cli /usr/local/bin/datagram-cli
+          sudo chmod +x /usr/local/bin/datagram-cli
+          
+          # Verify
+          if command -v datagram-cli &> /dev/null; then
+            echo "✅ Datagram CLI installed successfully"
+            datagram-cli --version 2>/dev/null || echo "Version: latest"
+          else
+            echo "❌ Installation verification failed"
+            exit 1
+          fi
+
+      - name: 🚀 Start Node with Auto-Restart
+        run: |
+          echo "🎯 Starting Datagram Node #${{ matrix.index }}..."
+          echo ""
+          
+          # ============================================
+          # Graceful Shutdown Handler
+          # ============================================
+          cleanup() {
+            echo ""
+            echo "═══════════════════════════════════════════════"
+            echo "⚠️  SHUTDOWN SIGNAL RECEIVED"
+            echo "═══════════════════════════════════════════════"
+            echo "⏰ Time: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "🛑 Stopping node gracefully..."
+            
+            # Kill datagram process
+            pkill -TERM -f datagram-cli || true
+            
+            # Wait for graceful shutdown
+            sleep 5
+            
+            # Force kill if still running
+            pkill -KILL -f datagram-cli || true
+            
+            echo "✅ Node stopped"
+            echo "═══════════════════════════════════════════════"
+            exit 0
+          }
+          
+          # Trap signals
+          trap cleanup SIGINT SIGTERM SIGHUP
+          
+          # ============================================
+          # Main Loop dengan Auto-Restart
+          # ============================================
+          RESTART_COUNT=0
+          START_TIME=$(date +%s)
+          TOTAL_UPTIME=0
+          
+          while [ $RESTART_COUNT -lt $MAX_RETRIES ]; do
+            ITERATION_START=$(date +%s)
+            
+            echo ""
+            echo "╔═══════════════════════════════════════════════╗"
+            echo "║         ITERATION #$((RESTART_COUNT + 1))                         ║"
+            echo "╚═══════════════════════════════════════════════╝"
+            echo "⏰ Timestamp      : $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "🔢 Restart Count  : $RESTART_COUNT / $MAX_RETRIES"
+            echo "⏱️  Total Uptime   : $((TOTAL_UPTIME / 60)) minutes"
+            echo "🔑 Using API Key  : ${API_KEY:0:8}...${API_KEY: -6}"
+            echo "───────────────────────────────────────────────"
+            
+            # Run node dengan timeout 5 jam
+            echo "▶️  Starting datagram-cli..."
+            timeout 5h datagram-cli run -- -key "$API_KEY" 2>&1 | while IFS= read -r line; do
+              echo "[Node #${{ matrix.index }}] $line"
+            done || {
+              EXIT_CODE=$?
+              ITERATION_END=$(date +%s)
+              ITERATION_DURATION=$((ITERATION_END - ITERATION_START))
+              TOTAL_UPTIME=$((TOTAL_UPTIME + ITERATION_DURATION))
+              
+              echo ""
+              echo "───────────────────────────────────────────────"
+              echo "⚠️  Node stopped with exit code: $EXIT_CODE"
+              echo "⏱️  Iteration duration: $((ITERATION_DURATION / 60)) minutes"
+              
+              case $EXIT_CODE in
+                124)
+                  echo "⏱️  Timeout reached (expected for restart)"
+                  ;;
+                0)
+                  echo "✅ Clean exit"
+                  ;;
+                *)
+                  echo "❌ Unexpected exit code: $EXIT_CODE"
+                  echo "⏳ Waiting 30 seconds before retry..."
+                  sleep 30
+                  ;;
+              esac
+            }
+            
+            ((RESTART_COUNT++))
+            
+            # Cooldown sebelum restart
+            if [ $RESTART_COUNT -lt $MAX_RETRIES ]; then
+              echo ""
+              echo "⏳ Cooldown period: $RESTART_DELAY seconds..."
+              sleep $RESTART_DELAY
+            fi
+          done
+          
+          # Max retries reached
+          TOTAL_RUNTIME=$(($(date +%s) - START_TIME))
+          echo ""
+          echo "═══════════════════════════════════════════════"
+          echo "🛑 MAX RESTART LIMIT REACHED"
+          echo "═══════════════════════════════════════════════"
+          echo "📊 Statistics:"
+          echo "   - Total Iterations : $RESTART_COUNT"
+          echo "   - Total Runtime    : $((TOTAL_RUNTIME / 3600))h $((TOTAL_RUNTIME % 3600 / 60))m"
+          echo "   - Total Uptime     : $((TOTAL_UPTIME / 3600))h $((TOTAL_UPTIME % 3600 / 60))m"
+          echo "   - Avg per Iteration: $((TOTAL_UPTIME / RESTART_COUNT / 60)) minutes"
+          echo "═══════════════════════════════════════════════"
+        env:
+          API_KEY: ${{ matrix.api_key }}
+          MAX_RETRIES: ${{ env.MAX_RETRIES }}
+          RESTART_DELAY: ${{ env.RESTART_DELAY }}
+
+      - name: 📊 Upload Logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ matrix.index }}-logs-${{ github.run_number }}
+          path: |
+            /tmp/datagram*.log
+            ~/.datagram/logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ============================================
+  # JOB 3: Health Monitor & Notification
+  # ============================================
+  monitor:
+    name: 📊 Health Monitor
+    needs: [setup-matrix, run-nodes]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Generate Report
+        run: |
+          echo "═══════════════════════════════════════════════"
+          echo "📊 DATAGRAM NODES HEALTH REPORT"
+          echo "═══════════════════════════════════════════════"
+          echo "⏰ Report Time   : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "🔢 Total Nodes   : ${{ needs.setup-matrix.outputs.total }}"
+          echo "📍 Workflow Run  : #${{ github.run_number }}"
+          echo "🌿 Branch        : ${{ github.ref_name }}"
+          echo "───────────────────────────────────────────────"
+          echo "📊 Job Status    : ${{ needs.run-nodes.result }}"
+          echo ""
+          
+          if [ "${{ needs.run-nodes.result }}" == "success" ]; then
+            echo "✅ All nodes completed successfully"
+          elif [ "${{ needs.run-nodes.result }}" == "failure" ]; then
+            echo "❌ Some nodes encountered errors"
+          else
+            echo "⚠️  Status: ${{ needs.run-nodes.result }}"
+          fi
+          
+          echo "───────────────────────────────────────────────"
+          echo "🔄 Next Run Info:"
+          echo "   - Cron Schedule  : Every 5 hours"
+          echo "   - Next Run       : ~5 hours from now"
+          echo "   - Manual Trigger : Available via workflow_dispatch"
+          echo "═══════════════════════════════════════════════"
+
+  # ============================================
+  # JOB 4: Auto-Restart Trigger (Optional)
+  # ============================================
+  schedule-next-run:
+    name: 🔄 Schedule Next Run
+    needs: [monitor]
+    runs-on: ubuntu-latest
+    if: always() && github.event_name != 'workflow_dispatch'
+    
+    steps:
+      - name: Notify Next Run
+        run: |
+          echo "🔔 Auto-restart mechanism active"
+          echo "⏰ This workflow will automatically restart in ~5 hours"
+          echo "🎯 Cron schedule: '0 */5 * * *'"
+          echo ""
+          echo "💡 To manually restart: Go to Actions → This workflow → Run workflow"
