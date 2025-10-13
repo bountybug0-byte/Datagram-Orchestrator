@@ -131,12 +131,13 @@ jobs:
           
           TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           
-          # Output to GitHub Actions
-          {
-            echo "matrix=$MATRIX"
-            echo "total=$COUNT"
-            echo "timestamp=$TIMESTAMP"
-          } >> "$GITHUB_OUTPUT"
+          # Output to GitHub Actions (escape for multiline JSON)
+          echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          
+          echo "total=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
           
           echo ""
           echo "════════════════════════════════════════════════"
