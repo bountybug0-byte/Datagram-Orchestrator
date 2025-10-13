@@ -253,6 +253,75 @@ def invoke_auto_accept():
     print_success(f"Proses selesai! Invitation baru diterima: {accepted_count}")
     write_log(f"Auto accept completed: {accepted_count} new acceptances")
 
+def validate_repo_access(repo_path: str, token: str) -> Dict:
+    """Check if repo exists and has required permissions"""
+    result = run_gh_api(f"api repos/{repo_path} --jq '.permissions.admin,.permissions.push'", token, max_retries=1)
+    if result["success"]:
+        try:
+            permissions = result["output"].strip().split('\n')
+            has_admin = permissions[0].lower() == "true" if len(permissions) > 0 else False
+            has_push = permissions[1].lower() == "true" if len(permissions) > 1 else False
+            return {"success": True, "has_admin": has_admin, "has_push": has_push}
+        except:
+            return {"success": False, "error": "Invalid response"}
+    return {"success": False, "error": result["error"]}
+
+def enable_actions(repo_path: str, token: str) -> Dict:
+    """Enable GitHub Actions for repository"""
+    try:
+        command = f"gh api -X PUT repos/{repo_path}/actions/permissions -f enabled=true"
+        result = run_command(command, env={"GH_TOKEN": token}, timeout=15)
+        if result.returncode == 0:
+            return {"success": True, "error": None}
+        else:
+            error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            return {"success": False, "error": error_msg}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def set_actions_secret(repo_path: str, token: str, secret_value: str) -> Dict:
+    """
+    Set repository-scoped Actions secret using GitHub CLI.
+    Target: https://github.com/{owner}/{repo}/settings/secrets/actions/new
+    """
+    try:
+        escaped_value = secret_value.replace("'", "'\\''")
+        command = f"echo '{escaped_value}' | gh secret set DATAGRAM_API_KEYS --repo {repo_path} --body -"
+        result = run_command(command, env={"GH_TOKEN": token}, timeout=30)
+        
+        if result.returncode == 0:
+            return {"success": True, "error": None}
+        else:
+            error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            return {"success": False, "error": error_msg}
+    except Exception as e:
+        return {"success": False, "error": f"Exception: {str(e)}"}
+
+def set_codespaces_secret(repo_path: str, token: str, secret_value: str) -> Dict:
+    """
+    Set repository-scoped Codespaces secret using GitHub CLI with --app codespaces flag.
+    Target: https://github.com/{owner}/{repo}/settings/secrets/codespaces/new
+    
+    Requires GitHub CLI v2.40.0+
+    """
+    try:
+        escaped_value = secret_value.replace("'", "'\\''")
+        command = f"echo '{escaped_value}' | gh secret set DATAGRAM_API_KEYS --app codespaces --repo {repo_path} --body -"
+        result = run_command(command, env={"GH_TOKEN": token}, timeout=30)
+        
+        if result.returncode == 0:
+            return {"success": True, "error": None}
+        else:
+            error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            if "404" in error_msg or "Not Found" in error_msg:
+                return {"success": False, "error": "Repository not found or no access"}
+            elif "403" in error_msg or "Forbidden" in error_msg:
+                return {"success": False, "error": "Permission denied (need admin access)"}
+            else:
+                return {"success": False, "error": error_msg}
+    except Exception as e:
+        return {"success": False, "error": f"Exception: {str(e)}"}
+
 def invoke_auto_set_secrets():
     print_header("8. AUTO SET SECRETS (ACTIONS + CODESPACES)")
     config = load_json_file(CONFIG_FILE)
@@ -293,6 +362,8 @@ def invoke_auto_set_secrets():
 
     print_info(f"\n🎯 Target: {len(target_repos)} repository/repositories")
     print_warning("\n⚠️  Proses ini akan:")
+    print("  • Validate repository access")
+    print("  • Enable GitHub Actions (jika belum aktif)")
     print("  • Set secret 'DATAGRAM_API_KEYS' ke GitHub Actions")
     print("  • Set secret 'DATAGRAM_API_KEYS' ke Codespaces")
     print("  • Format: JSON array untuk multi-node support")
@@ -301,82 +372,79 @@ def invoke_auto_set_secrets():
         print_warning("Operasi dibatalkan.")
         return
 
+    # Pre-validation: filter repos dengan akses valid
+    print_info("\n📋 Validating repository access...")
+    validated_repos = []
+    for target in target_repos:
+        repo_path = target['repo']
+        token = target['token']
+        print(f"  Checking {repo_path}...", end="", flush=True)
+        access = validate_repo_access(repo_path, token)
+        if access["success"]:
+            if access["has_admin"] or access["has_push"]:
+                print_success(" ✅")
+                validated_repos.append(target)
+            else:
+                print_warning(" ⚠️  No push access")
+        else:
+            print_error(f" ❌ {access['error']}")
+        time.sleep(0.3)
+
+    if not validated_repos:
+        print_error("\n❌ Tidak ada repository yang dapat diakses.")
+        return
+
+    print_info(f"\n✅ {len(validated_repos)}/{len(target_repos)} repositories valid")
+    
     success_count = 0
     failed_repos = []
 
-    for i, target in enumerate(target_repos, 1):
+    for i, target in enumerate(validated_repos, 1):
         repo_path = target['repo']
         token = target['token']
         owner = target['owner']
-        print(f"\n[{i}/{len(target_repos)}] Setting secrets untuk: {repo_path}")
+        print(f"\n[{i}/{len(validated_repos)}] Processing: {repo_path}")
+        
+        # Enable Actions
+        print("  ├─ Enabling Actions...", end="", flush=True)
+        enable_result = enable_actions(repo_path, token)
+        if enable_result["success"]:
+            print_success(" ✅")
+        else:
+            print_warning(f" ⚠️  {enable_result['error'][:40]}...")
+        
+        # Set Actions Secret
         print("  ├─ Actions Secret...", end="", flush=True)
         actions_result = set_actions_secret(repo_path, token, api_keys_json)
         if actions_result["success"]:
             print_success(" ✅")
         else:
-            print_error(f" ❌ {actions_result['error']}")
+            print_error(f" ❌ {actions_result['error'][:40]}...")
             failed_repos.append({'repo': repo_path, 'type': 'actions', 'error': actions_result['error']})
+        
+        # Set Codespaces Secret
         print("  └─ Codespaces Secret...", end="", flush=True)
         codespaces_result = set_codespaces_secret(repo_path, token, api_keys_json)
         if codespaces_result["success"]:
             print_success(" ✅")
-            success_count += 1
+            if actions_result["success"]:
+                success_count += 1
         else:
-            print_error(f" ❌ {codespaces_result['error']}")
+            print_error(f" ❌ {codespaces_result['error'][:40]}...")
             failed_repos.append({'repo': repo_path, 'type': 'codespaces', 'error': codespaces_result['error']})
+        
         time.sleep(1)
 
     print("\n" + "═" * 47)
-    print_success(f"✅ Berhasil set secrets: {success_count}/{len(target_repos)} repos")
+    print_success(f"✅ Berhasil set secrets: {success_count}/{len(validated_repos)} repos")
     if failed_repos:
         print_warning(f"\n⚠️  {len(failed_repos)} operasi gagal:")
         for fail in failed_repos[:5]:
             print(f"  • {fail['repo']} ({fail['type']}): {fail['error'][:50]}...")
     write_log(f"Auto set secrets completed: {success_count} successful, {len(failed_repos)} failed")
     if success_count > 0:
-        for target in target_repos:
+        for target in validated_repos:
             append_to_file(SECRETS_SET_FILE, target['owner'])
-
-def set_actions_secret(repo_path: str, token: str, secret_value: str) -> Dict:
-    try:
-        escaped_value = secret_value.replace('"', '\\"')
-        command = f'gh secret set DATAGRAM_API_KEYS --body "{escaped_value}" -R {repo_path}'
-        result = run_command(command, env={"GH_TOKEN": token}, timeout=30)
-        if result.returncode == 0:
-            return {"success": True, "error": None}
-        else:
-            return {"success": False, "error": result.stderr.strip() or "Unknown error"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-def set_codespaces_secret(repo_path: str, token: str, secret_value: str) -> Dict:
-    try:
-        from nacl import encoding, public
-        owner, repo = repo_path.split('/')
-        pubkey_result = run_gh_api(f"api repos/{owner}/{repo}/codespaces/secrets/public-key", token)
-        if not pubkey_result["success"]:
-            return {"success": False, "error": f"Failed to get public key: {pubkey_result['error']}"}
-        try:
-            pubkey_data = json.loads(pubkey_result["output"])
-            key_id = pubkey_data['key_id']
-            public_key = pubkey_data['key']
-        except (json.JSONDecodeError, KeyError) as e:
-            return {"success": False, "error": f"Invalid public key response: {str(e)}"}
-        public_key_obj = public.PublicKey(public_key.encode("utf-8"), encoding.Base64Encoder())
-        sealed_box = public.SealedBox(public_key_obj)
-        encrypted = sealed_box.encrypt(secret_value.encode("utf-8"))
-        encrypted_value = base64.b64encode(encrypted).decode("utf-8")
-        payload = json.dumps({"encrypted_value": encrypted_value, "key_id": key_id})
-        command = f'echo \'{payload}\' | gh api -X PUT repos/{owner}/{repo}/codespaces/secrets/DATAGRAM_API_KEYS --input -'
-        result = run_command(command, env={"GH_TOKEN": token}, timeout=30)
-        if result.returncode == 0 or result.returncode == 201:
-            return {"success": True, "error": None}
-        else:
-            return {"success": False, "error": result.stderr.strip() or "Failed to set secret"}
-    except ImportError:
-        return {"success": False, "error": "PyNaCl not installed"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 def deploy_to_github():
     print_header("9. DEPLOY TO GITHUB")
