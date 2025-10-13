@@ -218,6 +218,7 @@ jobs:
           echo "⏰ Started at    : ${{ needs.setup-matrix.outputs.timestamp }}"
           echo "🔑 API Key       : ${API_KEY:0:8}...${API_KEY: -6}"
           echo "🖥️ Runner        : $(hostname)"
+          echo "🌐 Public IP     : $(curl -s ifconfig.me || echo 'N/A')"
           echo "💾 Disk Space    : $(df -h / | awk 'NR==2 {print $4}') available"
           echo "🧠 Memory        : $(free -h | awk 'NR==2 {print $7}') available"
           echo "════════════════════════════════════════════════"
