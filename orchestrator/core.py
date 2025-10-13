@@ -9,7 +9,7 @@ from pathlib import Path
 from .helpers import (
     print_success, print_error, print_info, print_warning, print_header,
     write_log, run_gh_api, read_file_lines, append_to_file,
-    load_json_file, save_json_file,
+    load_json_file, save_json_file, run_command, # <-- Tambahkan run_command
     API_KEYS_FILE, TOKENS_FILE, CONFIG_FILE, TOKEN_CACHE_FILE,
     INVITED_USERS_FILE, ACCEPTED_USERS_FILE, SECRETS_SET_FILE, LOG_FILE
 )
@@ -32,7 +32,6 @@ def initialize_configuration():
 # =============================================
 def import_api_keys():
     print_header("2. IMPORT API KEYS")
-    # (Logika tidak berubah dari implementasi sebelumnya)
     print("Pilih metode import:\n  1. Input manual\n  2. Import dari file .txt")
     choice = input("\nPilihan (1/2): ")
     if choice == '1':
@@ -56,7 +55,6 @@ def import_api_keys():
 
 def show_api_keys_status():
     print_header("3. SHOW API KEYS STATUS")
-    # (Logika tidak berubah)
     keys = read_file_lines(API_KEYS_FILE)
     print_info(f"Total API Keys ditemukan: {len(keys)}")
     if keys:
@@ -68,7 +66,6 @@ def show_api_keys_status():
 # =============================================
 def import_github_tokens():
     print_header("4. IMPORT GITHUB TOKENS")
-    # (Logika tidak berubah)
     source_file = input("Masukkan path ke file .txt berisi token: ")
     if Path(source_file).is_file():
         tokens = [line for line in read_file_lines(Path(source_file)) if line.startswith("ghp_")]
@@ -82,7 +79,6 @@ def import_github_tokens():
 
 def validate_github_tokens():
     print_header("5. VALIDATE GITHUB TOKENS")
-    # (Logika tidak berubah)
     tokens = read_file_lines(TOKENS_FILE)
     if not tokens: return print_error("File tokens.txt kosong.")
     token_cache = load_json_file(TOKEN_CACHE_FILE)
@@ -110,7 +106,6 @@ def validate_github_tokens():
 # =============================================
 def invoke_auto_invite():
     print_header("6. AUTO INVITE COLLABORATORS")
-    # (Logika tidak berubah)
     config = load_json_file(CONFIG_FILE)
     if not config: return print_error("Konfigurasi belum diset.")
     token_cache = load_json_file(TOKEN_CACHE_FILE)
@@ -132,25 +127,31 @@ def invoke_auto_invite():
 
 def invoke_auto_accept():
     print_header("7. AUTO ACCEPT INVITATIONS")
-    # (Logika tidak berubah)
     config = load_json_file(CONFIG_FILE)
     token_cache = load_json_file(TOKEN_CACHE_FILE)
     if not config or not token_cache: return print_error("Konfigurasi/cache tidak ditemukan.")
     target_repo = f"{config['main_account_username']}/{config['main_repo_name']}".lower()
     accepted_count = 0
-    for i, token in enumerate(token_cache.keys()):
-        print(f"[{i+1}/{len(token_cache)}] Akun @{token_cache[token]}...", end="", flush=True)
+    for i, (token, username) in enumerate(token_cache.items()):
+        print(f"[{i+1}/{len(token_cache)}] Akun @{username}...", end="", flush=True)
         res = run_gh_api("api user/repository_invitations", token)
-        if not res["success"]: print_error(" ❌ Gagal fetch"); continue
+        if not res["success"]:
+            print_error(" ❌ Gagal fetch"); continue
         try:
             invitations = json.loads(res["output"])
             inv_id = next((inv['id'] for inv in invitations if inv['repository']['full_name'].lower() == target_repo), None)
             if inv_id:
                 accept_res = run_gh_api(f"api --method PATCH /user/repository_invitations/{inv_id} --silent", token)
-                if accept_res["success"]: print_success(" ✅ Accepted"); accepted_count += 1
-                else: print_error(" ❌ Gagal accept")
-            else: print_info(" ℹ️  No invitation")
-        except json.JSONDecodeError: print_error(" ❌ Gagal parse")
+                if accept_res["success"]:
+                    print_success(" ✅ Accepted"); accepted_count += 1
+                else:
+                    print_error(" ❌ Gagal accept")
+            else:
+                print_info(" ℹ️  No invitation")
+        except json.JSONDecodeError:
+            # Perbaikan: Tambahkan logging yang lebih detail
+            print_error(" ❌ Gagal parse JSON")
+            write_log(f"JSON Parse Error for @{username}. Response: {res['output']}")
         time.sleep(1)
     print_success(f"\nProses selesai. Undangan baru diterima: {accepted_count}")
 
@@ -163,7 +164,6 @@ def _encrypt_secret_with_python(public_key, secret_value):
 
 def invoke_auto_set_secrets():
     print_header("8. AUTO SET SECRETS")
-    # (Logika tidak berubah, hanya pemanggilan helper yang disesuaikan)
     config = load_json_file(CONFIG_FILE)
     api_keys_str = API_KEYS_FILE.read_text(encoding="utf-8").strip()
     token_cache = load_json_file(TOKEN_CACHE_FILE)
@@ -176,7 +176,8 @@ def invoke_auto_set_secrets():
     for i, (token, username) in enumerate(token_cache.items()):
         print(f"[{i+1}/{len(token_cache)}] @{username}:")
         key_res = run_gh_api("api user/codespaces/secrets/public-key", token)
-        if not key_res["success"]: print("   🔑 Gagal dapat public key"); continue
+        if not key_res["success"]:
+            print("   🔑 Gagal dapat public key"); continue
         key_data = json.loads(key_res["output"])
         encrypted_value = _encrypt_secret_with_python(key_data['key'], api_keys_str)
         payload = json.dumps({"encrypted_value": encrypted_value, "key_id": key_data['key_id'], "selected_repository_ids": [str(repo_id)]})
@@ -195,7 +196,6 @@ def invoke_auto_set_secrets():
 # =============================================
 def deploy_to_github():
     print_header("9. DEPLOY TO GITHUB")
-    # (Logika tidak berubah)
     config = load_json_file(CONFIG_FILE)
     if not config: return print_error("Konfigurasi belum diset.")
     repo_path = f"{config['main_account_username']}/{config['main_repo_name']}"
@@ -204,13 +204,20 @@ def deploy_to_github():
         if input("Repo tidak ditemukan. Buat baru? (y/n): ").lower() == 'y':
             run_gh_api(f"repo create {repo_path} --private --confirm", config['main_token'])
         else: return
+    
     print_info("Melakukan commit dan push...")
-    os.system('git add . && git commit -m "🚀 Deploy Orchestrator" && git push -u origin main --force')
-    print_success(f"\n✅ Deployment berhasil!\nLihat di: https://github.com/{repo_path}/actions")
+    # Perbaikan: Menggunakan run_command untuk konsistensi
+    run_command('git add .')
+    run_command('git commit -m "🚀 Deploy Orchestrator"')
+    result = run_command('git push -u origin main --force')
+
+    if result.returncode == 0:
+        print_success(f"\n✅ Deployment berhasil!\nLihat di: https://github.com/{repo_path}/actions")
+    else:
+        print_error(f"\n❌ Gagal melakukan push:\n{result.stderr}")
 
 def invoke_workflow_trigger():
     print_header("10. TRIGGER WORKFLOW")
-    # (Logika tidak berubah)
     config = load_json_file(CONFIG_FILE)
     if not config: return print_error("Konfigurasi belum diset.")
     repo_path = f"{config['main_account_username']}/{config['main_repo_name']}"
@@ -220,7 +227,6 @@ def invoke_workflow_trigger():
 
 def show_workflow_status():
     print_header("11. SHOW WORKFLOW STATUS")
-    # (Logika tidak berubah)
     config = load_json_file(CONFIG_FILE)
     if not config: return print_error("Konfigurasi belum diset.")
     repo_path = f"{config['main_account_username']}/{config['main_repo_name']}"
