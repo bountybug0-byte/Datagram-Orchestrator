@@ -373,23 +373,38 @@ def invoke_auto_set_secrets():
         print_warning("Operasi dibatalkan.")
         return
 
-    # Pre-validation: filter repos dengan akses valid
-    print_info("\n📋 Validating repository access...")
+    # Pre-validation: filter repos dengan akses valid (parallel)
+    print_info("\n📋 Validating repository access (parallel)...")
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
     validated_repos = []
-    for target in target_repos:
+    failed_repos = []
+    
+    def check_repo(target):
         repo_path = target['repo']
         token = target['token']
-        print(f"  Checking {repo_path}...", end="", flush=True)
         access = validate_repo_access(repo_path, token)
-        if access["success"]:
-            if access["has_admin"] or access["has_push"]:
-                print_success(" ✅")
-                validated_repos.append(target)
+        return (target, access)
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(check_repo, target): target for target in target_repos}
+        
+        for future in as_completed(futures):
+            target, access = future.result()
+            repo_path = target['repo']
+            
+            print(f"  {repo_path}...", end="", flush=True)
+            if access["success"]:
+                if access["has_admin"] or access["has_push"]:
+                    print_success(" ✅")
+                    validated_repos.append(target)
+                else:
+                    print_warning(" ⚠️  No push access")
+                    failed_repos.append(repo_path)
             else:
-                print_warning(" ⚠️  No push access")
-        else:
-            print_error(f" ❌ {access['error']}")
-        time.sleep(0.3)
+                error_short = access['error'][:30] if access['error'] else "Unknown"
+                print_error(f" ❌ {error_short}")
+                failed_repos.append(repo_path)
 
     if not validated_repos:
         print_error("\n❌ Tidak ada repository yang dapat diakses.")
