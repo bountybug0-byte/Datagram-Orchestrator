@@ -1,1 +1,5 @@
-
+{
+  "main_account_username": "your_github_username",
+  "main_repo_name": "datagram-runner",
+  "main_token": "ghp_your_main_account_token"
+}
