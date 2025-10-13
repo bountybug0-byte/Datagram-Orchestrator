@@ -4,17 +4,9 @@ import sys
 import json
 import subprocess
 import time
-import random
-from pathlib import Path
-import tempfile
 import shutil
-
-# Coba impor fcntl, jika gagal, abaikan karena ini untuk Unix
-try:
-    import fcntl  # Unix file locking
-    HAS_FCNTL = True
-except ImportError:
-    HAS_FCNTL = False
+from pathlib import Path
+from typing import Dict, List, Any, Optional
 
 # =============================================
 # KONFIGURASI PATH
@@ -34,9 +26,7 @@ ACCEPTED_USERS_FILE = CACHE_DIR / "accepted_users.txt"
 SECRETS_SET_FILE = CACHE_DIR / "secrets_set.txt"
 LOG_FILE = LOGS_DIR / "setup.log"
 
-# --- PERBAIKAN: Cari path 'gh' secara otomatis ---
 GH_EXECUTABLE = shutil.which("gh")
-# ------------------------------------------------
 
 # =============================================
 # HELPER: TAMPILAN & LOGGING
@@ -49,138 +39,268 @@ class Style:
     WARNING = '\033[93m'
     FAIL = '\033[91m'
     ENDC = '\033[0m'
+    BOLD = '\033[1m'
 
-def print_success(msg): print(f"{Style.GREEN}✅ {msg}{Style.ENDC}")
-def print_error(msg): print(f"{Style.FAIL}❌ {msg}{Style.ENDC}")
-def print_info(msg): print(f"{Style.CYAN}ℹ️  {msg}{Style.ENDC}")
-def print_warning(msg): print(f"{Style.WARNING}⚠️  {msg}{Style.ENDC}")
+def print_success(msg: str):
+    print(f"{Style.GREEN}✅ {msg}{Style.ENDC}")
 
-def print_header(msg):
-    print(f"\n{Style.HEADER}═══════════════════════════════════════{Style.ENDC}")
+def print_error(msg: str):
+    print(f"{Style.FAIL}❌ {msg}{Style.ENDC}")
+
+def print_info(msg: str):
+    print(f"{Style.CYAN}ℹ️  {msg}{Style.ENDC}")
+
+def print_warning(msg: str):
+    print(f"{Style.WARNING}⚠️  {msg}{Style.ENDC}")
+
+def print_header(msg: str):
+    print(f"\n{Style.HEADER}{'═' * 47}{Style.ENDC}")
     print(f"{Style.HEADER}  {msg}{Style.ENDC}")
-    print(f"{Style.HEADER}═══════════════════════════════════════{Style.ENDC}\n")
+    print(f"{Style.HEADER}{'═' * 47}{Style.ENDC}\n")
 
 def initialize_directories():
+    """Membuat direktori yang diperlukan jika belum ada."""
     for dir_path in [CONFIG_DIR, CACHE_DIR, LOGS_DIR]:
-        dir_path.mkdir(exist_ok=True)
+        dir_path.mkdir(parents=True, exist_ok=True)
 
-def write_log(message):
+def write_log(message: str):
+    """Menulis log dengan timestamp."""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{timestamp} - {message}\n")
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+    except Exception:
+        pass
 
 def press_enter_to_continue():
+    """Tunggu user menekan Enter."""
     input("\nTekan Enter untuk melanjutkan...")
 
 # =============================================
 # HELPER: FUNGSI SISTEM
 # =============================================
 def check_dependencies():
+    """Validasi dependensi yang diperlukan."""
     print_header("CHECKING DEPENDENCIES")
     missing = False
     
-    # --- PERBAIKAN: Cek GH_EXECUTABLE ---
     if not GH_EXECUTABLE:
-        print_error("GitHub CLI (gh) not found in system PATH.")
+        print_error("GitHub CLI (gh) tidak ditemukan di PATH sistem.")
+        print_warning("Install dari: https://cli.github.com/")
         missing = True
     else:
         try:
-            ver = subprocess.check_output(f'"{GH_EXECUTABLE}" --version', shell=True, stderr=subprocess.STDOUT).decode('utf-8').splitlines()[0]
-            print_success(f"GitHub CLI: {ver}")
-        except Exception:
-            print_error("GitHub CLI (gh) found but failed to execute.")
+            result = subprocess.run(
+                [GH_EXECUTABLE, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                version = result.stdout.strip().split('\n')[0]
+                print_success(f"GitHub CLI: {version}")
+            else:
+                print_error("GitHub CLI ditemukan tapi gagal dieksekusi.")
+                missing = True
+        except Exception as e:
+            print_error(f"Error mengecek GitHub CLI: {str(e)}")
             missing = True
-    # -------------------------------------
-            
+    
     try:
         import nacl
         print_success("PyNaCl: Installed")
     except ImportError:
-        print_error("PyNaCl not found. Run: pip install -r requirements.txt")
+        print_error("PyNaCl tidak ditemukan.")
+        print_warning("Install dengan: pip install PyNaCl")
         missing = True
-        
+    
     if missing:
-        print_error("\nBeberapa dependensi tidak ditemukan. Mohon install terlebih dahulu.")
+        print_error("\n❌ Ada dependensi yang tidak terpenuhi. Install terlebih dahulu.")
         sys.exit(1)
+    
+    print_success("\n✅ Semua dependensi terpenuhi!\n")
 
-def run_command(command, env=None, check=False):
-    # --- PERBAIKAN: Gunakan path 'gh' yang eksplisit ---
+def run_command(command: str, env: Optional[Dict[str, str]] = None, timeout: int = 30) -> subprocess.CompletedProcess:
+    """
+    Menjalankan command dengan error handling yang robust.
+    
+    Args:
+        command: Command yang akan dijalankan
+        env: Environment variables tambahan
+        timeout: Timeout dalam detik
+    
+    Returns:
+        subprocess.CompletedProcess object
+    """
     if command.strip().startswith("gh "):
         if not GH_EXECUTABLE:
-            raise FileNotFoundError("GitHub CLI (gh) not found.")
-        # Ganti 'gh' dengan path lengkapnya
+            raise FileNotFoundError("GitHub CLI (gh) tidak ditemukan di PATH sistem.")
         command = command.replace("gh ", f'"{GH_EXECUTABLE}" ', 1)
-    # -------------------------------------------------
-        
+    
+    full_env = os.environ.copy()
+    if env:
+        full_env.update(env)
+    
     try:
-        return subprocess.run(
-            command, shell=True, capture_output=True, text=True,
-            encoding='utf-8', env=env, check=check
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            env=full_env,
+            timeout=timeout
         )
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        return e
+        return result
+    except subprocess.TimeoutExpired:
+        write_log(f"Command timeout: {command}")
+        raise TimeoutError(f"Command timeout setelah {timeout}s")
+    except Exception as e:
+        write_log(f"Command error: {command} - {str(e)}")
+        raise
 
-def run_gh_api(command, token, max_retries=3):
-    # Tidak perlu diubah, karena sudah memanggil run_command yang diperbaiki
+def run_gh_api(command: str, token: str, max_retries: int = 3, timeout: int = 30) -> Dict[str, Any]:
+    """
+    Menjalankan GitHub CLI API command dengan retry mechanism.
+    
+    Args:
+        command: GitHub CLI command (tanpa 'gh' prefix)
+        token: GitHub Personal Access Token
+        max_retries: Maksimal percobaan retry
+        timeout: Timeout per percobaan
+    
+    Returns:
+        Dict dengan keys: success (bool), output (str), error (str)
+    """
     full_command = f"gh {command}"
-    current_env = os.environ.copy()
-    current_env["GH_TOKEN"] = token
     
     for attempt in range(max_retries):
-        result = run_command(full_command, env=current_env)
+        try:
+            result = run_command(
+                full_command,
+                env={"GH_TOKEN": token},
+                timeout=timeout
+            )
+            
+            if result.returncode == 0:
+                return {
+                    "success": True,
+                    "output": result.stdout.strip(),
+                    "error": None
+                }
+            
+            stderr = result.stderr.lower()
+            
+            # Retry untuk network errors
+            if any(keyword in stderr for keyword in ["timeout", "connection", "network"]):
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    print_warning(f"Network error. Retry dalam {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+            
+            # Rate limit handling
+            if "rate limit" in stderr or "403" in stderr:
+                if attempt < max_retries - 1:
+                    wait_time = 60
+                    print_warning(f"Rate limit detected. Menunggu {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+            
+            return {
+                "success": False,
+                "output": None,
+                "error": result.stderr.strip()
+            }
         
-        if result and hasattr(result, 'returncode') and result.returncode == 0:
-            return {"success": True, "output": result.stdout.strip()}
-        
-        stderr = result.stderr.lower() if result and hasattr(result, 'stderr') and result.stderr else ""
-        
-        if "timeout" in stderr or "connection" in stderr:
+        except TimeoutError as e:
             if attempt < max_retries - 1:
-                print_warning(f"Connection failed. Retrying...")
+                print_warning(f"Timeout. Retry {attempt + 1}/{max_retries}...")
                 time.sleep(5)
                 continue
-        
-        error_output = result.stderr.strip() if result and hasattr(result, 'stderr') else "Unknown error"
-        return {"success": False, "output": error_output}
-        
-    return {"success": False, "output": "Max retries exceeded"}
+            return {
+                "success": False,
+                "output": None,
+                "error": str(e)
+            }
+        except Exception as e:
+            write_log(f"GH API Error: {command} - {str(e)}")
+            return {
+                "success": False,
+                "output": None,
+                "error": str(e)
+            }
+    
+    return {
+        "success": False,
+        "output": None,
+        "error": f"Max retries ({max_retries}) exceeded"
+    }
 
 # =============================================
-# HELPER: MANAJEMEN FILE (ATOMIC)
+# HELPER: MANAJEMEN FILE
 # =============================================
-def read_file_lines(file_path):
-    if not file_path.exists(): 
+def read_file_lines(file_path: Path) -> List[str]:
+    """Membaca file dan return list of lines (stripped)."""
+    if not file_path.exists():
         return []
-    with open(file_path, "r", encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return [line.strip() for line in f if line.strip()]
+    except Exception as e:
+        write_log(f"Error reading {file_path}: {str(e)}")
+        return []
 
-def append_to_file(file_path, content):
-    file_path.parent.mkdir(exist_ok=True)
-    with open(file_path, "a", encoding="utf-8") as f:
-        if HAS_FCNTL:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        f.write(content + "\n")
-        if HAS_FCNTL:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+def append_to_file(file_path: Path, content: str):
+    """Append content ke file secara atomic."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(file_path, "a", encoding="utf-8") as f:
+            f.write(content + "\n")
+    except Exception as e:
+        write_log(f"Error appending to {file_path}: {str(e)}")
+        raise
 
-def load_json_file(file_path, default=None):
+def load_json_file(file_path: Path, default: Optional[Dict] = None) -> Dict:
+    """Load JSON file dengan fallback ke default value."""
     if default is None:
         default = {}
-    if not file_path.exists(): 
+    
+    if not file_path.exists():
         return default
+    
     try:
-        with open(file_path, "r", encoding="utf-8") as f: 
+        with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        write_log(f"Error loading JSON {file_path}: {str(e)}")
         return default
 
-def save_json_file(file_path, data):
-    file_path.parent.mkdir(exist_ok=True)
-    temp_fd, temp_path = tempfile.mkstemp(dir=file_path.parent)
+def save_json_file(file_path: Path, data: Dict):
+    """Save JSON file secara atomic menggunakan temp file."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    temp_path = file_path.with_suffix('.tmp')
     try:
-        with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp_path, file_path)
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        # Atomic replace
+        temp_path.replace(file_path)
     except Exception as e:
-        os.unlink(temp_path)
-        raise e
+        if temp_path.exists():
+            temp_path.unlink()
+        write_log(f"Error saving JSON {file_path}: {str(e)}")
+        raise
+
+def validate_api_key_format(key: str) -> bool:
+    """Validasi format API key (basic check)."""
+    if not key or len(key) < 10:
+        return False
+    if key.isspace():
+        return False
+    return True
+
+def chunk_list(lst: List[Any], chunk_size: int) -> List[List[Any]]:
+    """Split list menjadi chunks."""
+    return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
