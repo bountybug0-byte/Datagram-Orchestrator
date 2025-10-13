@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: false
+      debug_mode:
+        description: 'Enable debug output'
+        required: false
+        type: boolean
+        default: true
   
   schedule:
     - cron: '0 */5 * * *'
@@ -28,7 +33,7 @@ concurrency:
 
 jobs:
   # ============================================
-  # JOB 1: Setup Matrix from Secret
+  # JOB 1: Setup Matrix from Secret (ENHANCED)
   # ============================================
   setup-matrix:
     name: 🔧 Setup Multi-Account Matrix
@@ -42,56 +47,151 @@ jobs:
       - name: Parse API Keys
         id: parse
         run: |
+          set -euo pipefail  # Exit on error, undefined vars, pipe failures
+          
           echo "🔍 Parsing DATAGRAM_API_KEYS secret..."
+          echo "════════════════════════════════════════════════"
           
-          KEYS='${{ secrets.DATAGRAM_API_KEYS }}'
-          
-          if [ -z "$KEYS" ]; then
-            echo "❌ ERROR: DATAGRAM_API_KEYS secret is empty or not set!"
-            echo "💡 Set secret di: https://github.com/${{ github.repository }}/settings/secrets/actions"
+          # Check if secret exists
+          if [ -z "${DATAGRAM_API_KEYS:-}" ]; then
+            echo "❌ CRITICAL ERROR: DATAGRAM_API_KEYS secret is NOT SET!"
+            echo ""
+            echo "📋 SETUP INSTRUCTIONS:"
+            echo "1. Go to: https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo "2. Click 'New repository secret'"
+            echo "3. Name: DATAGRAM_API_KEYS"
+            echo "4. Value format (choose one):"
+            echo "   • JSON Array: [\"key1\", \"key2\", \"key3\"]"
+            echo "   • Newline separated: key1<ENTER>key2<ENTER>key3"
+            echo ""
             exit 1
           fi
           
-          # Deteksi format: JSON array atau newline-separated
-          if [[ "$KEYS" == "["* ]]; then
-            # Format JSON array
-            KEYS_ARRAY="$KEYS"
-          else
-            # Format newline-separated (convert ke JSON array)
-            KEYS_ARRAY=$(echo "$KEYS" | tr ',' '\n' | jq -R -s -c 'split("\n") | map(select(length > 0 and . != ""))')
+          KEYS="${DATAGRAM_API_KEYS}"
+          
+          # Debug: Show first/last chars (safe)
+          KEY_LENGTH=${#KEYS}
+          echo "✅ Secret found (length: $KEY_LENGTH chars)"
+          
+          if [ "${{ inputs.debug_mode || 'true' }}" == "true" ]; then
+            echo "🐛 DEBUG: First 10 chars: ${KEYS:0:10}..."
+            echo "🐛 DEBUG: Last 10 chars: ...${KEYS: -10}"
           fi
           
+          # Detect and normalize format
+          if [[ "$KEYS" == "["* ]]; then
+            echo "📦 Detected format: JSON Array"
+            KEYS_ARRAY="$KEYS"
+            
+            # Validate JSON
+            if ! echo "$KEYS_ARRAY" | jq empty 2>/dev/null; then
+              echo "❌ ERROR: Invalid JSON format!"
+              echo "🐛 Raw content (first 200 chars): ${KEYS:0:200}"
+              exit 1
+            fi
+            
+          else
+            echo "📦 Detected format: Newline/Comma separated"
+            
+            # Convert to JSON array (handle both newlines and commas)
+            KEYS_ARRAY=$(echo "$KEYS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            
+            if [ "${{ inputs.debug_mode || 'true' }}" == "true" ]; then
+              echo "🐛 DEBUG: Converted to JSON: $KEYS_ARRAY"
+            fi
+          fi
+          
+          # Count keys
           COUNT=$(echo "$KEYS_ARRAY" | jq 'length')
           
           if [ "$COUNT" -eq 0 ]; then
             echo "❌ ERROR: No valid API keys found after parsing!"
+            echo "🐛 Parsed array: $KEYS_ARRAY"
             exit 1
           fi
           
-          # Generate matrix
+          echo "✅ Found $COUNT valid API key(s)"
+          
+          # Generate matrix with validation
           MATRIX=$(jq -n --argjson keys "$KEYS_ARRAY" '{
             include: [
               range(0; $keys | length) | {
-                index: . + 1,
+                index: (. + 1),
                 api_key: $keys[.]
               }
             ]
           }')
           
+          # Validate matrix structure
+          if ! echo "$MATRIX" | jq '.include | length' &>/dev/null; then
+            echo "❌ ERROR: Invalid matrix structure generated!"
+            echo "🐛 Matrix: $MATRIX"
+            exit 1
+          fi
+          
           TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-          echo "total=$COUNT" >> $GITHUB_OUTPUT
-          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+          # Output to GitHub Actions
+          {
+            echo "matrix=$MATRIX"
+            echo "total=$COUNT"
+            echo "timestamp=$TIMESTAMP"
+          } >> "$GITHUB_OUTPUT"
           
-          echo "✅ Successfully parsed $COUNT API keys"
-          
-      - name: Validate Matrix
-        run: |
-          echo "📊 Matrix Configuration:"
-          echo '${{ steps.parse.outputs.matrix }}' | jq .
           echo ""
-          echo "Total Nodes: ${{ steps.parse.outputs.total }}"
+          echo "════════════════════════════════════════════════"
+          echo "✅ Matrix setup completed successfully!"
+          echo "📊 Total nodes to deploy: $COUNT"
+          echo "════════════════════════════════════════════════"
+        env:
+          DATAGRAM_API_KEYS: ${{ secrets.DATAGRAM_API_KEYS }}
+
+      - name: Validate Matrix Output
+        run: |
+          echo "════════════════════════════════════════════════"
+          echo "📊 MATRIX VALIDATION"
+          echo "════════════════════════════════════════════════"
+          
+          MATRIX='${{ steps.parse.outputs.matrix }}'
+          TOTAL='${{ steps.parse.outputs.total }}'
+          
+          echo "📋 Generated Matrix:"
+          echo "$MATRIX" | jq '.'
+          echo ""
+          echo "🔢 Total Nodes: $TOTAL"
+          echo "⏰ Timestamp: ${{ steps.parse.outputs.timestamp }}"
+          echo ""
+          
+          # Validate each node
+          echo "🔍 Validating node configurations..."
+          NODE_COUNT=$(echo "$MATRIX" | jq '.include | length')
+          
+          if [ "$NODE_COUNT" -ne "$TOTAL" ]; then
+            echo "❌ ERROR: Mismatch between matrix length ($NODE_COUNT) and total ($TOTAL)"
+            exit 1
+          fi
+          
+          # Check if all nodes have required fields
+          for i in $(seq 0 $((NODE_COUNT - 1))); do
+            INDEX=$(echo "$MATRIX" | jq -r ".include[$i].index")
+            KEY_PREVIEW=$(echo "$MATRIX" | jq -r ".include[$i].api_key" | head -c 10)
+            
+            if [ -z "$INDEX" ] || [ "$INDEX" == "null" ]; then
+              echo "❌ ERROR: Node $i missing index"
+              exit 1
+            fi
+            
+            if [ -z "$KEY_PREVIEW" ] || [ "$KEY_PREVIEW" == "null" ]; then
+              echo "❌ ERROR: Node $i missing api_key"
+              exit 1
+            fi
+            
+            echo "  ✓ Node #$INDEX configured (key: ${KEY_PREVIEW}...)"
+          done
+          
+          echo ""
+          echo "✅ All nodes validated successfully!"
+          echo "════════════════════════════════════════════════"
 
   # ============================================
   # JOB 2: Run Datagram Nodes (Parallel)
@@ -125,11 +225,11 @@ jobs:
 
       - name: 📦 Install Datagram CLI
         run: |
+          set -euo pipefail
+          
           echo "📥 Downloading Datagram CLI..."
           
-          # URL download dari latest release
           DOWNLOAD_URL="https://github.com/Datagram-Group/datagram-cli-release/releases/latest/download/datagram-cli-x86_64-unknown-linux-musl"
-          
           MAX_RETRIES=3
           RETRY_COUNT=0
           
@@ -164,9 +264,11 @@ jobs:
 
       - name: 🚀 Start Node with Auto-Restart
         run: |
+          set -euo pipefail
+          
           echo "🎯 Starting Datagram Node #${{ matrix.index }}..."
           
-          # Cleanup function untuk graceful shutdown
+          # Cleanup function
           cleanup() {
             echo ""
             echo "═══════════════════════════════════════════════"
@@ -184,7 +286,6 @@ jobs:
             exit 0
           }
           
-          # Register signal handlers
           trap cleanup SIGINT SIGTERM SIGHUP
           
           RESTART_COUNT=0
@@ -193,7 +294,7 @@ jobs:
           while [ $RESTART_COUNT -lt $MAX_RETRIES ]; do
             echo ""
             echo "╔═══════════════════════════════════════════════╗"
-            echo "║      ITERATION #$((RESTART_COUNT + 1)) of $MAX_RETRIES                  ║"
+            printf "║      ITERATION #%-3d of %-3d                  ║\n" $((RESTART_COUNT + 1)) "$MAX_RETRIES"
             echo "╚═══════════════════════════════════════════════╝"
             echo "⏰ Timestamp   : $(date '+%Y-%m-%d %H:%M:%S')"
             echo "📊 Total Runtime: $((TOTAL_RUNTIME / 3600))h $((TOTAL_RUNTIME % 3600 / 60))m"
@@ -202,7 +303,6 @@ jobs:
             
             START_TIME=$(date +%s)
             
-            # Run dengan timeout 5 jam
             timeout 5h datagram-cli run -- -key "$API_KEY" 2>&1 | while IFS= read -r line; do
               echo "[Node #${{ matrix.index }}] $line"
             done || {
