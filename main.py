@@ -17,7 +17,7 @@ def show_menu():
     """Menampilkan menu utama program."""
     os.system('cls' if os.name == 'nt' else 'clear')
     print(Style.CYAN + "╔═══════════════════════════════════════════════╗")
-    print("║     DATAGRAM ORCHESTRATOR v3.1 (SECURED)      ║")
+    print("║     DATAGRAM ORCHESTRATOR v3.2 (OPTIMIZED)   ║")
     print("╚═══════════════════════════════════════════════╝" + Style.ENDC)
     
     print(f"\n{Style.WARNING}📋 SETUP & KONFIGURASI{Style.ENDC}")
@@ -30,7 +30,7 @@ def show_menu():
     print(f"\n{Style.WARNING}🤝 MANAJEMEN KOLABORASI{Style.ENDC}")
     print("  6. Auto Invite Collaborators")
     print("  7. Auto Accept Invitations")
-    print("  8. Auto Set Secrets")
+    print("  8. Auto Set Secrets (Actions + Codespaces)")
     
     print(f"\n{Style.WARNING}🚀 DEPLOYMENT & MONITORING{Style.ENDC}")
     print("  9. Deploy to GitHub")
@@ -47,13 +47,9 @@ def show_menu():
 def main():
     """Fungsi utama untuk menjalankan program."""
     try:
-        # Initialize directories
         initialize_directories()
-        
-        # Check dependencies
         check_dependencies()
         
-        # Menu actions mapping
         menu_actions = {
             '1': initialize_configuration,
             '2': import_api_keys,
