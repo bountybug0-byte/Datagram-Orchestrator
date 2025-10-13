@@ -6,36 +6,78 @@
 # -------------------------------------------------------------------
 config/config.json
 config/tokens.txt
-
-
-# -------------------------------------------------------------------
-# DATA PENGGUNA: Jaga agar data ini tetap lokal.
-# -------------------------------------------------------------------
 config/api_keys.txt
 
+# Temporary files yang mungkin berisi data sensitif
+*.json.tmp
+.sec_*
+payload.json
+temp_*.json
 
 # -------------------------------------------------------------------
-# FILE YANG DIHASILKAN OTOMATIS: Abaikan cache dan log.
+# DATA CACHE: File tracking otomatis
+# -------------------------------------------------------------------
+config/.cache/
+config/token_cache.json
+config/invited_users.txt
+config/accepted_users.txt
+config/secrets_set.txt
+
+# -------------------------------------------------------------------
+# LOGS: Jaga agar logs tetap lokal
 # -------------------------------------------------------------------
 logs/
-config/.cache/
-
+*.log
 
 # -------------------------------------------------------------------
-# FILE SPESIFIK PYTHON: Abaikan file bytecode dan virtual environment.
+# FILE YANG DIHASILKAN OTOMATIS: Abaikan cache dan build artifacts
 # -------------------------------------------------------------------
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.venv
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# -------------------------------------------------------------------
+# FILE SPESIFIK PYTHON: Virtual environment
+# -------------------------------------------------------------------
+.venv/
 venv/
 env/
-
+ENV/
+virtualenv/
 
 # -------------------------------------------------------------------
 # FILE SPESIFIK SISTEM OPERASI & EDITOR KODE
 # -------------------------------------------------------------------
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# -------------------------------------------------------------------
+# BACKUP FILES: Ignore backup dan recovery files
+# -------------------------------------------------------------------
+*.bak
+*.backup
+*~
+.*.swp
+.*.swo
