@@ -1,752 +1,493 @@
-# 🚀 Datagram 24/7 Multi-Node Orchestrator
+# 🚀 Datagram Orchestrator v3.0
 
-Enterprise-grade automation system untuk menjalankan multiple Datagram nodes secara **parallel** dan **non-stop** menggunakan GitHub Actions dengan dukungan full orchestration dari local terminal.
-
-[![GitHub Actions](https://img.shields.io/badge/GitHub-Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
-[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell&logoColor=white)](https://docs.microsoft.com/en-us/powershell/)
-[![Bash](https://img.shields.io/badge/Bash-4.0%2B-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+Automated GitHub Actions orchestrator for running Datagram nodes across multiple accounts 24/7.
 
 ---
 
-## 📋 Table of Contents
+## 📋 Prerequisites
 
-- [✨ Features](#-features)
-- [🏗️ Architecture](#️-architecture)
-- [📦 Prerequisites](#-prerequisites)
-- [🚀 Quick Start](#-quick-start)
-- [📖 Detailed Setup Guide](#-detailed-setup-guide)
-- [⚙️ Configuration](#️-configuration)
-- [🎯 Usage Examples](#-usage-examples)
-- [🔧 Troubleshooting](#-troubleshooting)
-- [📊 Monitoring](#-monitoring)
-- [🤝 Contributing](#-contributing)
-
----
-
-## ✨ Features
-
-### 🎯 Core Features
-
-- ✅ **True Parallel Execution** - Semua node berjalan bersamaan, tidak sequential
-- ✅ **24/7 Auto-Restart** - Triple-layer restart mechanism (loop + timeout + cron)
-- ✅ **Multi-Account Support** - Unlimited API keys dalam satu secret
-- ✅ **Zero Configuration** - Setup sekali, run forever
-- ✅ **Health Monitoring** - Real-time status tracking per node
-- ✅ **Graceful Shutdown** - Proper cleanup saat restart
-
-### 🤖 Orchestration Features
-
-- ✅ **Auto Invite Collaborators** - Bulk invitation management
-- ✅ **Auto Accept Invitations** - Automated invitation acceptance
-- ✅ **Auto Set Secrets** - Encrypted secret distribution via Codespaces API
-- ✅ **Token Validation** - Smart caching untuk performance
-- ✅ **Retry Mechanism** - Connection failure handling
-- ✅ **Progress Tracking** - File-based state management
-
-### 🛠️ Technical Features
-
-- ✅ **Cross-Platform** - Windows (PowerShell) & Linux/Mac (Bash)
-- ✅ **GitHub CLI Integration** - Native gh command usage
-- ✅ **Sodium Encryption** - Secure secret storage dengan PyNaCl
-- ✅ **JSON Configuration** - Clean, readable config files
-- ✅ **Logging System** - Detailed operation logs
-- ✅ **Error Recovery** - Intelligent retry dengan exponential backoff
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   LOCAL ORCHESTRATOR                         │
-│  ┌────────────────────────────────────────────────────┐     │
-│  │  setup_datagram.ps1 / setup_datagram.sh            │     │
-│  │  ┌──────────────────────────────────────────────┐  │     │
-│  │  │  1. Initialize Configuration                 │  │     │
-│  │  │  2. Import API Keys & GitHub Tokens         │  │     │
-│  │  │  3. Validate & Cache Tokens                 │  │     │
-│  │  │  4. Auto Invite Collaborators               │  │     │
-│  │  │  5. Auto Accept Invitations                 │  │     │
-│  │  │  6. Auto Set Secrets (Encrypted)            │  │     │
-│  │  │  7. Deploy Workflow to GitHub               │  │     │
-│  │  │  8. Trigger & Monitor                       │  │     │
-│  │  └──────────────────────────────────────────────┘  │     │
-│  └────────────────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────────────────┘
-                             ↓
-                    Push & Auto-Trigger
-                             ↓
-┌─────────────────────────────────────────────────────────────┐
-│                  GITHUB ACTIONS RUNNER                       │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Job: setup-matrix                                   │   │
-│  │  → Parse DATAGRAM_API_KEYS secret                    │   │
-│  │  → Generate dynamic matrix                           │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                             ↓                                │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Job: run-nodes (Parallel Matrix Strategy)          │   │
-│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐      │   │
-│  │  │  Node #1   │ │  Node #2   │ │  Node #N   │      │   │
-│  │  │ ─────────  │ │ ─────────  │ │ ─────────  │      │   │
-│  │  │ API_KEY_1  │ │ API_KEY_2  │ │ API_KEY_N  │      │   │
-│  │  │            │ │            │ │            │      │   │
-│  │  │ [Running]  │ │ [Running]  │ │ [Running]  │      │   │
-│  │  │ 24/7 Loop  │ │ 24/7 Loop  │ │ 24/7 Loop  │      │   │
-│  │  │            │ │            │ │            │      │   │
-│  │  │ Timeout:   │ │ Timeout:   │ │ Timeout:   │      │   │
-│  │  │ 5h 50m     │ │ 5h 50m     │ │ 5h 50m     │      │   │
-│  │  └────────────┘ └────────────┘ └────────────┘      │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                             ↓                                │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Job: monitor                                        │   │
-│  │  → Health check all nodes                            │   │
-│  │  → Generate report                                   │   │
-│  │  → Upload logs (on failure)                          │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-                             ↓
-                   Auto-Restart via Cron
-                   (Every 5 hours: 0 */5 * * *)
-```
-
----
-
-## 📦 Prerequisites
-
-### Required Tools
-
-#### Windows (PowerShell)
-
-```powershell
-# 1. PowerShell 5.1+ (sudah built-in di Windows 10+)
-$PSVersionTable.PSVersion
-
-# 2. GitHub CLI
-winget install --id GitHub.cli
-
-# 3. Git
-winget install --id Git.Git
-
-# 4. Python 3.8+ (untuk encryption)
-winget install --id Python.Python.3.11
-
-# 5. PyNaCl (untuk secret encryption)
-pip install pynacl
-```
-
-#### Linux/macOS (Bash)
-
-```bash
-# Ubuntu/Debian
-sudo apt update
-sudo apt install -y gh git jq python3 python3-pip
-pip3 install pynacl
-
-# macOS (Homebrew)
-brew install gh git jq python3
-pip3 install pynacl
-
-# Verify installations
-gh --version
-git --version
-jq --version
-python3 --version
-python3 -c "import nacl; print('PyNaCl OK')"
-```
+### Required Software
+- **Python 3.11+** ([Download](https://www.python.org/downloads/))
+- **GitHub CLI** ([Download](https://cli.github.com/))
+- **Git** ([Download](https://git-scm.com/downloads))
 
 ### GitHub Requirements
+- GitHub Personal Access Token with permissions:
+  - ✅ `repo` (Full control of repositories)
+  - ✅ `workflow` (Update workflows)
+  - ✅ `admin:org` (Manage organization)
+  - ✅ `codespace` (Manage codespace secrets)
 
-1. **Personal Access Token (PAT)** dengan scopes:
-   - ✅ `repo` (full control)
-   - ✅ `workflow` (manage workflows)
-   - ✅ `admin:org` (manage collaborators)
-   - ✅ `codespace` (untuk set secrets via Codespaces API)
-
-2. **Repository**:
-   - Private/Public repository
-   - Actions enabled
-   - Collaborator access untuk multi-account
+Generate token: https://github.com/settings/tokens
 
 ---
 
-## 🚀 Quick Start
+## ⚡ Quick Start
 
-### Method 1: Automated Setup (Recommended)
+### 1. Install Dependencies
 
-#### Windows PowerShell
-
+**Windows:**
 ```powershell
-# 1. Clone or create project directory
-mkdir datagram-orchestrator
-cd datagram-orchestrator
+# Install tools
+winget install GitHub.cli Git.Git Python.Python.3.11
 
-# 2. Download scripts
-# (Copy script content dari artifacts ke setup_datagram.ps1)
-
-# 3. Run orchestrator
-.\setup_datagram.ps1
-
-# 4. Follow interactive menu:
-#    1 → Initialize Configuration
-#    2 → Import API Keys
-#    4 → Import GitHub Tokens
-#    5 → Validate Tokens
-#    6 → Auto Invite Collaborators
-#    7 → Auto Accept Invitations
-#    8 → Auto Set Secrets
-#    9 → Deploy to GitHub
-#    10 → Trigger Workflow
+# Install Python dependencies
+pip install -r requirements.txt
 ```
 
-#### Linux/macOS Bash
-
+**Linux/macOS:**
 ```bash
-# 1. Clone or create project directory
-mkdir datagram-orchestrator
-cd datagram-orchestrator
+# Ubuntu/Debian
+sudo apt install gh git python3-pip
+pip3 install -r requirements.txt
 
-# 2. Download script
-# (Copy script content ke setup_datagram.sh)
-chmod +x setup_datagram.sh
-
-# 3. Run orchestrator
-./setup_datagram.sh
-
-# Follow same steps as Windows
+# macOS
+brew install gh git python3
+pip3 install -r requirements.txt
 ```
 
-### Method 2: Manual Setup
-
+### 2. Authenticate GitHub CLI
 ```bash
-# 1. Create directory structure
-mkdir -p .github/workflows config logs
-
-# 2. Create api_keys.txt
-cat > config/api_keys.txt <<EOF
-your_api_key_1
-your_api_key_2
-your_api_key_3
-EOF
-
-# 3. Create workflow file
-# Copy content dari datagram-runner.yml artifact
-
-# 4. Set GitHub Secret
-gh secret set DATAGRAM_API_KEYS < config/api_keys.txt
-
-# 5. Push to GitHub
-git init
-git add .
-git commit -m "Initial setup"
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-git push -u origin main
-
-# 6. Trigger workflow
-gh workflow run datagram-runner.yml
+gh auth login
 ```
 
----
+### 3. Run Orchestrator
 
-## 📖 Detailed Setup Guide
-
-### Step 1: Configuration Initialization
-
+**Windows:**
 ```powershell
-# Run orchestrator
-.\setup_datagram.ps1
-
-# Menu 1: Initialize Configuration
-# Input:
-#   - Main GitHub username: your_username
-#   - Repository name: datagram-runner
-#   - Personal Access Token: ghp_xxxxxxxxxxxxx
-
-# Output: config/config.json
-{
-  "main_account_username": "your_username",
-  "main_repo_name": "datagram-runner",
-  "main_token": "ghp_xxxxxxxxxxxxx"
-}
+.\start.ps1
 ```
 
-### Step 2: API Keys Import
-
-**Format 1: Manual Input**
+**Linux/macOS:**
+```bash
+chmod +x start.sh
+./start.sh
 ```
-Menu 2 → Option 1
-API Key #1: key_abc123xyz
-API Key #2: key_def456uvw
-(Enter kosong untuk selesai)
-```
-
-**Format 2: From File**
-```
-Menu 2 → Option 2
-Path file: D:\keys\datagram_keys.txt
-
-# File content:
-key_abc123xyz
-key_def456uvw
-key_ghi789rst
-```
-
-### Step 3: GitHub Tokens Import
-
-```
-Menu 4: Import GitHub Tokens
-Path file: D:\tokens\github_tokens.txt
-
-# File content (PAT format):
-ghp_1234567890abcdefghijklmnopqrst1
-ghp_abcdefghijklmnopqrstuvwxyz1234
-ghp_zyxwvutsrqponmlkjihgfedcba9876
-```
-
-### Step 4: Token Validation & Caching
-
-```
-Menu 5: Validate GitHub Tokens
-
-Output:
-[1/3] Validating... ✅ @account1
-[2/3] Validating... ✅ @account2 (cached)
-[3/3] Validating... ❌ Invalid token
-
-Valid Tokens: 2/3
-
-# Creates: config/token_cache.json
-{
-  "ghp_123...": "account1",
-  "ghp_abc...": "account2"
-}
-```
-
-### Step 5: Auto Invite Collaborators
-
-```
-Menu 6: Auto Invite Collaborators
-
-Process:
-1. Load valid tokens from cache
-2. Filter: exclude main account & already invited
-3. Check existing collaborator status
-4. Send invitations
-
-Output:
-[1/5] @account1... ✅ Invited
-[2/5] @account2... ℹ️  Already collaborator
-[3/5] @account3... ✅ Invited
-...
-
-Berhasil: 5/5
-
-# Creates: config/invited_users.txt
-account1
-account2
-account3
-```
-
-### Step 6: Auto Accept Invitations
-
-```
-Menu 7: Auto Accept Invitations
-
-Process:
-1. Iterate through all tokens
-2. Check invitation list via API
-3. Accept matching repository invitation
-
-Output:
-[1/5] @account1... ✅ Accepted
-[2/5] @account2... ℹ️  No invitation
-[3/5] @account3... ✅ Already collaborator
-...
-
-Summary:
-  ✅ Accepted       : 3
-  👥 Already member : 1
-  ℹ️  No invitation  : 1
-
-# Creates: config/accepted_users.txt
-```
-
-### Step 7: Auto Set Secrets (Encrypted)
-
-```
-Menu 8: Auto Set Secrets
-
-Process:
-1. Load API keys from config/api_keys.txt
-2. For each token:
-   a. Get repository ID
-   b. Get public encryption key
-   c. Encrypt API keys using PyNaCl
-   d. Set via Codespaces Secrets API
-
-Output:
-[1/5] @account1
-   🔍 Get repo ID... ✅ 123456789
-   🔑 Get public key... ✅
-   🔐 Set DATAGRAM_API_KEYS... ✅
-   📊 Berhasil: 1/1
-
-[2/5] @account2
-   🔍 Get repo ID... ✅ 123456789
-   🔑 Get public key... ✅
-   🔐 Set DATAGRAM_API_KEYS... ✅
-   📊 Berhasil: 1/1
-
-Summary:
-  ✅ Success : 5
-  ⏭️  Skipped : 0
-
-# Creates: config/secrets_set.txt
-```
-
-**Important Notes:**
-- Secret name: `DATAGRAM_API_KEYS`
-- Encryption: Sodium sealed box (libsodium)
-- Scope: User-level Codespaces secret
-- Repository access: Auto-configured per account
-
-### Step 8: Deploy to GitHub
-
-```
-Menu 9: Deploy to GitHub
-
-Process:
-1. Check if repository exists
-2. Create if needed
-3. Initialize git (if .git not exists)
-4. Add workflow file check
-5. Commit & push
-
-Output:
-🔍 Checking repository... ✅ Found
-📦 Initializing git repository...
-📝 Checking workflow file...
-🚀 Deploying to GitHub...
-
-✅ Deployment successful!
-Repository: https://github.com/your_username/datagram-runner
-Actions: https://github.com/your_username/datagram-runner/actions
-```
-
-### Step 9: Trigger & Monitor
-
-```
-Menu 10: Trigger Workflow
-
-✅ Workflow triggered successfully!
-View at: https://github.com/.../actions
-
-🔍 Fetching latest run...
-   Run ID: 123456789
-   Status: in_progress
-   URL: https://github.com/.../runs/123456789
 
 ---
 
-Menu 11: Show Workflow Status
+## 📂 Project Structure
 
-Recent Workflow Runs:
-═══════════════════════════════════════
-
-✅ Run #123456789
-   Workflow: Datagram 24/7 Multi-Node Runner
-   Status: completed (success)
-   Created: 2024-01-15T10:30:00Z
-
-🔄 Run #123456788
-   Workflow: Datagram 24/7 Multi-Node Runner
-   Status: in_progress
-   Created: 2024-01-15T05:30:00Z
+```
+datagram-orchestrator/
+├── .github/workflows/
+│   └── datagram-runner.yml       # GitHub Actions workflow (auto-restart every 5h)
+├── config/
+│   ├── api_keys.txt              # Your Datagram API keys (one per line)
+│   ├── tokens.txt                # GitHub PATs (one per line)
+│   ├── config.json               # Main account configuration
+│   └── .cache/                   # Auto-generated tracking files
+├── logs/
+│   └── setup.log                 # Execution logs
+├── orchestrator/
+│   ├── core.py                   # Main orchestration logic
+│   └── helpers.py                # Utility functions
+├── main.py                       # Entry point
+├── start.ps1                     # Windows launcher
+├── start.sh                      # Linux/macOS launcher
+└── requirements.txt              # Python dependencies
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-### config/config.json
-
+### Step 1: Initialize Configuration (Menu 1)
 ```json
 {
   "main_account_username": "your_github_username",
   "main_repo_name": "datagram-runner",
-  "main_token": "ghp_your_personal_access_token"
+  "main_token": "ghp_your_main_account_token"
 }
 ```
 
-### config/api_keys.txt
-
+### Step 2: Import API Keys (Menu 2)
+**File:** `config/api_keys.txt`
 ```
 key_abc123xyz456def789ghi012jkl345mno
 key_pqr678stu901vwx234yza567bcd890efg
 key_hij123klm456nop789qrs012tuv345wxy
 ```
 
-**Supported Formats:**
-- One key per line (recommended)
-- Comma-separated (for GitHub Secret)
-- JSON array (for programmatic usage)
-
-### config/tokens.txt
-
+### Step 3: Import GitHub Tokens (Menu 4)
+**File:** `config/tokens.txt`
 ```
-ghp_1234567890abcdefghijklmnopqrst123456789
-ghp_abcdefghijklmnopqrstuvwxyz0123456789abc
-ghp_zyxwvutsrqponmlkjihgfedcba9876543210zy
+ghp_1234567890abcdefghij
+ghp_abcdefghijklmnopqrst
+ghp_uvwxyz0123456789abcd
 ```
-
-**Requirements:**
-- Must start with `ghp_`
-- Valid GitHub Personal Access Token
-- Required scopes: repo, workflow, admin:org, codespace
 
 ---
 
-## 🎯 Usage Examples
+## 🎯 Usage Workflow
 
-### Example 1: Setup dari Zero
-
-```powershell
-# 1. Buat project baru
-mkdir my-datagram-nodes
-cd my-datagram-nodes
-
-# 2. Siapkan files
-# - Copy setup_datagram.ps1
-# - Copy datagram-runner.yml ke .github/workflows/
-
-# 3. Siapkan data
-# Buat file api_keys.txt dan tokens.txt
-
-# 4. Run orchestrator
-.\setup_datagram.ps1
-
-# 5. Execute secara berurutan:
-1 → Init config
-2 → Import API keys
-4 → Import tokens
-5 → Validate tokens
-6 → Invite collaborators
-7 → Accept invitations
-8 → Set secrets
-9 → Deploy
-10 → Trigger
+### Complete Setup (First Time)
+```
+1. Menu 1 → Initialize Configuration
+2. Menu 2 → Import API Keys
+3. Menu 4 → Import GitHub Tokens
+4. Menu 5 → Validate GitHub Tokens
+5. Menu 6 → Auto Invite Collaborators
+6. Menu 7 → Auto Accept Invitations
+7. Menu 8 → Auto Set Secrets
+8. Menu 9 → Deploy to GitHub
+9. Menu 10 → Trigger Workflow
 ```
 
-### Example 2: Update API Keys
+### Daily Operations
 
-```powershell
-# Jika ingin menambah/update API keys:
-
-# 1. Edit file
-notepad config/api_keys.txt
-
-# 2. Run orchestrator
-.\setup_datagram.ps1
-
-# 3. Reset secrets_set tracking
-13 → Clean Cache
-
-# 4. Re-set secrets
-8 → Auto Set Secrets
-
-# 5. Restart workflow
-10 → Trigger Workflow
+**Check Status:**
+```bash
+Menu 11 → Show Workflow Status
 ```
 
-### Example 3: Add New Accounts
+**View Logs:**
+```bash
+Menu 12 → View Logs
+```
 
-```powershell
-# 1. Add tokens ke file
-echo "ghp_new_token_here" >> config/tokens.txt
+**Update API Keys:**
+```bash
+1. Edit config/api_keys.txt
+2. Menu 13 → Clean Cache
+3. Menu 8 → Auto Set Secrets
+4. Menu 10 → Trigger Workflow
+```
 
-# 2. Run orchestrator
-.\setup_datagram.ps1
+**Add New Accounts:**
+```bash
+1. Add new tokens to config/tokens.txt
+2. Menu 5 → Validate Tokens
+3. Menu 6 → Invite Collaborators
+4. Menu 7 → Accept Invitations
+5. Menu 8 → Set Secrets
+```
 
-# 3. Validate new token
-5 → Validate Tokens
+---
 
-# 4. Invite
-6 → Auto Invite
+## 🔐 Security Best Practices
 
-# 5. Accept (dari akun baru)
-7 → Auto Accept
+### Token Management
+- ✅ **DO:** Store tokens in `config/` directory (already gitignored)
+- ✅ **DO:** Rotate tokens every 90 days
+- ✅ **DO:** Use tokens with minimum required permissions
+- ❌ **DON'T:** Share tokens publicly
+- ❌ **DON'T:** Commit tokens to git
 
-# 6. Set secrets (dari akun baru)
-8 → Auto Set Secrets
+### API Keys Protection
+- API keys are encrypted using PyNaCl before being sent to GitHub
+- Keys are stored as GitHub Codespace secrets (not repository secrets)
+- Each account only has access to keys assigned to them
+
+### Revoke Compromised Tokens
+```bash
+# GitHub Settings → Developer settings → Personal access tokens → Revoke
+# Then regenerate and re-run Menu 4 → 5 → 8
 ```
 
 ---
 
 ## 🔧 Troubleshooting
 
-### Common Issues
+### Common Errors
 
-#### 1. "GitHub CLI not found"
+| Error | Solution |
+|-------|----------|
+| `gh: command not found` | Install GitHub CLI: `winget install GitHub.cli` |
+| `ModuleNotFoundError: nacl` | Install dependencies: `pip install -r requirements.txt` |
+| `API rate limit exceeded` | Wait 1 hour or use fewer accounts |
+| `Resource not accessible` | Regenerate token with correct permissions |
+| `refusing to allow OAuth` | Authorize token for organization (SSO) |
 
-**Solution:**
+### Debug Commands
+
+**Check GitHub CLI Auth:**
 ```bash
-# Windows
-winget install GitHub.cli
-
-# Linux
-sudo apt install gh
-
-# macOS
-brew install gh
-
-# Authenticate
-gh auth login
+gh auth status
 ```
 
-#### 2. "PyNaCl import error"
-
-**Solution:**
+**View Workflow Logs:**
 ```bash
-pip install pynacl
-
-# If multiple Python versions:
-pip3 install pynacl
-python3 -m pip install pynacl
+gh run list
+gh run view <run-id> --log
 ```
 
-#### 3. "API rate limit exceeded"
-
-**Solution:**
-- Wait 1 hour for rate limit reset
-- Use authenticated requests (set GH_TOKEN)
-- Reduce concurrent operations
-
-#### 4. "Secret encryption failed"
-
-**Solution:**
+**Check Token Validity:**
 ```bash
-# Verify PyNaCl installation
-python3 -c "from nacl import public; print('OK')"
-
-# Re-install if needed
-pip3 uninstall pynacl
-pip3 install pynacl
+Menu 5 → Validate GitHub Tokens
 ```
 
-#### 5. "Workflow not triggered"
-
-**Solution:**
+**Reset Everything:**
 ```bash
-# Check workflow file exists
-ls .github/workflows/datagram-runner.yml
-
-# Check Actions enabled in repo settings
-# Repository → Settings → Actions → Allow all actions
-
-# Manual trigger
-gh workflow run datagram-runner.yml
+Menu 13 → Clean Cache
+# Then re-run setup (Menu 5-8)
 ```
 
-### Debug Mode
+---
 
+## 📊 How It Works
+
+### Execution Flow
+```
+1. Parse API Keys → Split into JSON matrix
+2. Spawn Parallel Nodes → Max 50 concurrent jobs
+3. Each Node:
+   - Downloads Datagram CLI
+   - Runs: datagram-cli -key <KEY>
+   - Auto-restart every 5 hours
+   - Max 100 iterations per job
+4. Monitor & Report → Upload logs on failure
+5. Cron Trigger → Restart workflow every 5 hours
+```
+
+### GitHub Actions Architecture
+```
+Main Repo (your account)
+└── Workflow: datagram-runner.yml
+    ├── Job 1: Setup Matrix (parse API keys)
+    ├── Job 2: Run Nodes (parallel execution)
+    │   ├── Node #1 (runner: ubuntu-latest)
+    │   ├── Node #2 (runner: ubuntu-latest)
+    │   └── Node #N (max 50 parallel)
+    ├── Job 3: Monitor (health check)
+    └── Job 4: Schedule Next Run (cron)
+```
+
+### Collaborator Accounts
+- Each account accepts invitation to main repo
+- Sets DATAGRAM_API_KEYS secret in their Codespace
+- Workflow runs under their account (distributes load)
+- Secrets are isolated per account
+
+---
+
+## 🎛️ Customization
+
+### Adjust Auto-Restart Timing
+**File:** `.github/workflows/datagram-runner.yml`
+```yaml
+schedule:
+  - cron: '0 */3 * * *'  # Every 3 hours
+  - cron: '0 */6 * * *'  # Every 6 hours
+  - cron: '0 0 * * *'    # Once daily
+```
+
+### Change Parallel Execution Limit
+```yaml
+strategy:
+  max-parallel: 20   # Run max 20 nodes simultaneously
+  max-parallel: 50   # Default
+  max-parallel: 100  # Requires GitHub Team/Enterprise plan
+```
+
+### Adjust Node Restart Behavior
+```yaml
+env:
+  MAX_RETRIES: 50      # Reduce iterations
+  RESTART_DELAY: 30    # Increase cooldown
+```
+
+### Change Job Timeout
+```yaml
+timeout-minutes: 330  # 5h 30m
+timeout-minutes: 280  # 4h 40m
+```
+
+---
+
+## 📈 Monitoring
+
+### Real-time Status
 ```bash
-# Enable verbose output
-export GH_DEBUG=1
+# Via orchestrator
+Menu 11 → Show Workflow Status
 
-# Check logs
+# Via GitHub CLI
+gh run list --limit 10
+gh run watch <run-id>
+
+# Via browser
+https://github.com/<username>/<repo>/actions
+```
+
+### Log Analysis
+```bash
+# View orchestrator logs
 cat logs/setup.log
 
-# GitHub Actions logs
-gh run list
-gh run view <run_id> --log
+# View GitHub Actions logs
+gh run view <run-id> --log
+gh run view <run-id> --log-failed
+
+# Download logs
+gh run download <run-id>
 ```
-
----
-
-## 📊 Monitoring
-
-### Real-time Monitoring
-
-```bash
-# Via GitHub CLI
-gh run list --limit 5
-gh run view <run_id> --log-failed
-
-# Via Web
-https://github.com/YOUR_USERNAME/YOUR_REPO/actions
-```
-
-### Workflow Status
-
-- ✅ **Success**: All nodes running normally
-- 🔄 **In Progress**: Nodes currently executing
-- ⏳ **Queued**: Waiting for runner availability
-- ❌ **Failed**: Check logs for errors
 
 ### Performance Metrics
+```bash
+# Check success rate
+gh run list --limit 100 --json conclusion | \
+  jq '[.[] | select(.conclusion=="success")] | length'
 
-```
-Per Node:
-- Uptime: ~5 hours per iteration
-- Restart Interval: ~10 seconds cooldown
-- Max Iterations: 100 (configurable)
-- Total Runtime: ~500 hours max
-
-Overall System:
-- Parallel Nodes: Unlimited (GitHub limit: 20-180)
-- Auto-Restart: Every 5 hours via cron
-- Zero Downtime: <1 minute gap during restart
+# View run durations
+gh run list --limit 10 --json durationMs
 ```
 
 ---
 
-## 🤝 Contributing
+## ⚠️ Known Limitations
 
-### Development Setup
+### GitHub Actions Free Tier Limits
+| Resource | Public Repos | Private Repos |
+|----------|--------------|---------------|
+| Concurrent jobs | 20 | 20 |
+| Job execution time | 6 hours | 6 hours |
+| Workflow run time | 35 days | 35 days |
+| Storage | 500 MB | 500 MB |
+| Minutes | Unlimited | 2000/month |
 
+### Current Issues
+1. **Secret Management:** Temporary file created during encryption (security risk)
+2. **Git Operations:** Force push without safety checks (data loss risk)
+3. **Rate Limiting:** Basic retry logic only (needs exponential backoff)
+4. **No Rollback:** Failed batch operations cannot be rolled back
+5. **Limited Validation:** Minimal input validation for usernames/tokens
+
+### Workarounds
+- Use **public repositories** for unlimited minutes
+- For private repos, consider **self-hosted runners**
+- Rotate accounts to avoid rate limits
+- Monitor logs regularly for failures
+
+---
+
+## 🔄 Update & Maintenance
+
+### Update API Keys
 ```bash
-git clone https://github.com/YOUR_USERNAME/datagram-orchestrator
-cd datagram-orchestrator
-
-# Test PowerShell script
-pwsh -File setup_datagram.ps1
-
-# Test Bash script
-bash -x setup_datagram.sh
+1. Edit config/api_keys.txt
+2. Menu 13 → Clean Cache (reset secrets_set.txt)
+3. Menu 8 → Auto Set Secrets
+4. Menu 10 → Trigger Workflow
 ```
 
-### Code Style
+### Add New Accounts
+```bash
+1. Add token to config/tokens.txt
+2. Menu 5 → Validate Tokens
+3. Menu 6 → Invite Collaborators
+4. Menu 7 → Accept Invitations
+5. Menu 8 → Set Secrets
+```
 
-- **PowerShell**: PascalCase functions, descriptive names
-- **Bash**: snake_case functions, POSIX-compliant
-- **Comments**: Explain "why", not "what"
-- **Error Handling**: Always handle edge cases
+### Update Workflow File
+```bash
+1. Edit .github/workflows/datagram-runner.yml
+2. git add . && git commit -m "Update workflow"
+3. git push
+4. Menu 10 → Trigger Workflow (test changes)
+```
+
+### Rotate GitHub Tokens
+```bash
+1. Generate new tokens at: https://github.com/settings/tokens
+2. Update config/tokens.txt and config/config.json
+3. Menu 13 → Clean Cache
+4. Menu 5 → Validate Tokens
+5. Menu 8 → Auto Set Secrets
+6. Revoke old tokens from GitHub Settings
+```
+
+---
+
+## 🆘 Emergency Procedures
+
+### Stop All Workflows
+```bash
+# Via GitHub CLI
+gh run list --status=in_progress --json databaseId --jq '.[].databaseId' | \
+  xargs -I {} gh run cancel {}
+
+# Via browser
+Actions → Select workflow → Cancel workflow
+```
+
+### Rollback Deployment
+```bash
+# Revert to previous commit
+git log --oneline -5
+git revert <commit-hash>
+git push
+
+# Or force rollback
+git reset --hard <old-commit>
+git push --force
+```
+
+### Complete Reset
+```bash
+# ⚠️ WARNING: Deletes all tracking data
+gh run list --status=in_progress --json databaseId --jq '.[].databaseId' | \
+  xargs -I {} gh run cancel {}
+
+rm -rf config/.cache/*
+gh secret delete DATAGRAM_API_KEYS
+
+# Re-run setup from scratch
+Menu 1 → 2 → 4 → 5 → 6 → 7 → 8 → 9 → 10
+```
+
+---
+
+## 📚 Additional Resources
+
+- **GitHub CLI Manual:** https://cli.github.com/manual/
+- **GitHub Actions Docs:** https://docs.github.com/en/actions
+- **Datagram Network:** https://docs.datagram.network/
+- **Cron Expression Generator:** https://crontab.guru/
+- **Quick Reference Guide:** See `QUICK_REFERENCE.md`
 
 ---
 
 ## 📄 License
 
-MIT License - Feel free to use and modify
+This project is provided as-is for personal use. Modify and distribute freely.
 
 ---
 
-## 🙏 Acknowledgments
+## 🤝 Support
 
-- Datagram Network Team
-- GitHub Actions Community
-- PyNaCl Developers
-
----
-
-## 📞 Support
-
-- **Issues**: Create GitHub issue dengan detail log
-- **Discussions**: GitHub Discussions untuk Q&A
-- **Documentation**: Update README jika ada improvement
+- **Issues:** Create issue in GitHub repository
+- **Logs:** Check `logs/setup.log` for debugging
+- **Status:** Use Menu 11 for workflow status
 
 ---
 
-**Built with ❤️ by Code-Architect**
+**Last Updated:** 2024  
+**Version:** 3.0 (Refactored)  
+**Maintained By:** Code-Architect
 
-*"Kode bukan hanya tentang membuat sesuatu berfungsi, tapi membuat sesuatu yang bertahan."*
+---
+
+## 🎯 Quick Commands Cheat Sheet
+
+```bash
+# First time setup
+1 → 2 → 4 → 5 → 6 → 7 → 8 → 9 → 10
+
+# Update API keys
+Edit api_keys.txt → 13 → 8 → 10
+
+# Add new accounts
+Edit tokens.txt → 5 → 6 → 7 → 8
+
+# Monitor status
+11 (Show Status) | 12 (View Logs)
+
+# Emergency stop
+gh run list --status=in_progress | cancel all
+```
+
+---
+
+**Pro Tip:** Bookmark this README for quick reference during operations! 🚀
