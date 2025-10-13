@@ -40,6 +40,7 @@ class Style:
     FAIL = '\033[91m'
     ENDC = '\033[0m'
     BOLD = '\033[1m'
+    INFO = '\033[94m'  # Blue untuk info
 
 def print_success(msg: str):
     print(f"{Style.GREEN}✅ {msg}{Style.ENDC}")
