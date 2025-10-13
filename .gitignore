@@ -1,0 +1,41 @@
+# File: .gitignore
+
+# -------------------------------------------------------------------
+# KEAMANAN: JANGAN PERNAH MENGUNGGAH FILE-FILE DI BAWAH INI!
+# File-file ini berisi token akses pribadi dan konfigurasi sensitif.
+# -------------------------------------------------------------------
+config/config.json
+config/tokens.txt
+
+
+# -------------------------------------------------------------------
+# DATA PENGGUNA: Jaga agar data ini tetap lokal.
+# -------------------------------------------------------------------
+config/api_keys.txt
+
+
+# -------------------------------------------------------------------
+# FILE YANG DIHASILKAN OTOMATIS: Abaikan cache dan log.
+# -------------------------------------------------------------------
+logs/
+config/.cache/
+
+
+# -------------------------------------------------------------------
+# FILE SPESIFIK PYTHON: Abaikan file bytecode dan virtual environment.
+# -------------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv/
+env/
+
+
+# -------------------------------------------------------------------
+# FILE SPESIFIK SISTEM OPERASI & EDITOR KODE
+# -------------------------------------------------------------------
+.DS_Store
+.vscode/
+.idea/
