@@ -230,7 +230,7 @@ jobs:
           
           echo "📥 Downloading Datagram CLI..."
           
-          DOWNLOAD_URL="https://github.com/Datagram-Group/datagram-cli-release/releases/latest/download/datagram-cli-x86_64-unknown-linux-musl"
+          DOWNLOAD_URL="https://github.com/Datagram-Group/datagram-cli-release/releases/latest/download/datagram-cli-x86_64-linux"
           MAX_RETRIES=3
           RETRY_COUNT=0
           
