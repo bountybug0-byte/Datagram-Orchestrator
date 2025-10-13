@@ -1,83 +1,51 @@
-# File: .gitignore
-
-# -------------------------------------------------------------------
-# KEAMANAN: JANGAN PERNAH MENGUNGGAH FILE-FILE DI BAWAH INI!
-# File-file ini berisi token akses pribadi dan konfigurasi sensitif.
-# -------------------------------------------------------------------
-config/config.json
-config/tokens.txt
-config/api_keys.txt
-
-# Temporary files yang mungkin berisi data sensitif
-*.json.tmp
-.sec_*
-payload.json
-temp_*.json
-
-# -------------------------------------------------------------------
-# DATA CACHE: File tracking otomatis
-# -------------------------------------------------------------------
-config/.cache/
-config/token_cache.json
-config/invited_users.txt
-config/accepted_users.txt
-config/secrets_set.txt
-
-# -------------------------------------------------------------------
-# LOGS: Jaga agar logs tetap lokal
-# -------------------------------------------------------------------
-logs/
-*.log
-
-# -------------------------------------------------------------------
-# FILE YANG DIHASILKAN OTOMATIS: Abaikan cache dan build artifacts
-# -------------------------------------------------------------------
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
 *.so
-*.egg
-*.egg-info/
-dist/
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
 .eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# -------------------------------------------------------------------
-# FILE SPESIFIK PYTHON: Virtual environment
-# -------------------------------------------------------------------
-.venv/
+# Virtual Environment
 venv/
-env/
 ENV/
-virtualenv/
+env/
+.venv
 
-# -------------------------------------------------------------------
-# FILE SPESIFIK SISTEM OPERASI & EDITOR KODE
-# -------------------------------------------------------------------
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.project
-.pydevproject
+.DS_Store
 
-# -------------------------------------------------------------------
-# BACKUP FILES: Ignore backup dan recovery files
-# -------------------------------------------------------------------
+# Datagram Orchestrator - SENSITIVE FILES
+config/api_keys.txt
+config/tokens.txt
+config/config.json
+config/.cache/
+logs/
+
+# Git
+.git/
+
+# Temporary files
+*.tmp
+*.log
 *.bak
-*.backup
-*~
-.*.swp
-.*.swo
