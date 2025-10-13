@@ -21,9 +21,10 @@ env:
   NODE_VERSION: 'latest'
   RESTART_DELAY: 10
   MAX_RETRIES: 100
+  NODE_TIMEOUT_HOURS: 5
 
 concurrency:
-  group: datagram-${{ github.ref }}-${{ github.run_number }}
+  group: datagram-runner-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -42,15 +43,13 @@ jobs:
       - name: Parse API Keys
         id: parse
         run: |
-          echo "🔍 Parsing DATAGRAM_API_KEYS secret..."
+          set -euo pipefail
           
-          # Support multiple formats:
-          # 1. Comma-separated: key1,key2,key3
-          # 2. Newline-separated
-          # 3. JSON array: ["key1","key2","key3"]
+          echo "🔍 Parsing DATAGRAM_API_KEYS secret..."
           
           KEYS='${{ secrets.DATAGRAM_API_KEYS }}'
           
+          # Validate secret exists
           if [ -z "$KEYS" ]; then
             echo "❌ ERROR: DATAGRAM_API_KEYS secret is empty!"
             exit 1
@@ -58,22 +57,23 @@ jobs:
           
           # Detect format and convert to JSON array
           if [[ "$KEYS" == "["* ]]; then
-            # Already JSON
             KEYS_ARRAY="$KEYS"
           else
-            # Convert comma/newline to JSON array
-            KEYS_ARRAY=$(echo "$KEYS" | tr ',' '\n' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            KEYS_ARRAY=$(echo "$KEYS" | tr ',' '\n' | jq -R -s -c 'split("\n") | map(select(length > 0))' || {
+              echo "❌ ERROR: Failed to parse API keys with jq"
+              exit 1
+            })
           fi
           
-          # Validate keys
-          COUNT=$(echo "$KEYS_ARRAY" | jq 'length')
+          # Validate array
+          COUNT=$(echo "$KEYS_ARRAY" | jq 'length' || echo "0")
           
           if [ "$COUNT" -eq 0 ]; then
-            echo "❌ ERROR: No valid API keys found!"
+            echo "❌ ERROR: No valid API keys found after parsing!"
             exit 1
           fi
           
-          # Create matrix with index for better tracking
+          # Create matrix with index
           MATRIX=$(jq -n --argjson keys "$KEYS_ARRAY" '{
             include: [
               range(0; $keys | length) | {
@@ -81,7 +81,10 @@ jobs:
                 api_key: $keys[.]
               }
             ]
-          }')
+          }' || {
+            echo "❌ ERROR: Failed to create matrix"
+            exit 1
+          })
           
           TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           
@@ -95,7 +98,7 @@ jobs:
       - name: Validate Matrix
         run: |
           echo "📊 Matrix Configuration:"
-          echo '${{ steps.parse.outputs.matrix }}' | jq .
+          echo '${{ steps.parse.outputs.matrix }}' | jq . || echo "Failed to display matrix"
 
   # ============================================
   # JOB 2: Run Datagram Nodes (Parallel)
@@ -130,16 +133,16 @@ jobs:
 
       - name: 📦 Install Datagram CLI
         run: |
+          set -euo pipefail
+          
           echo "📥 Downloading Datagram CLI..."
           
           DOWNLOAD_URL="https://github.com/Datagram-Group/datagram-cli-release/releases/latest/download/datagram-cli-x86_64-linux"
-          
-          # Download with retry
           MAX_RETRIES=3
           RETRY_COUNT=0
           
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if wget -q --show-progress "$DOWNLOAD_URL" -O datagram-cli; then
+            if wget -q --show-progress --timeout=30 "$DOWNLOAD_URL" -O datagram-cli; then
               echo "✅ Download successful"
               break
             else
@@ -154,11 +157,17 @@ jobs:
             fi
           done
           
+          # Verify download
+          if [ ! -f datagram-cli ] || [ ! -s datagram-cli ]; then
+            echo "❌ Downloaded file is invalid"
+            exit 1
+          fi
+          
           # Install
           sudo mv datagram-cli /usr/local/bin/datagram-cli
           sudo chmod +x /usr/local/bin/datagram-cli
           
-          # Verify
+          # Verify installation
           if command -v datagram-cli &> /dev/null; then
             echo "✅ Datagram CLI installed successfully"
             datagram-cli --version 2>/dev/null || echo "Version: latest"
@@ -169,6 +178,8 @@ jobs:
 
       - name: 🚀 Start Node with Auto-Restart
         run: |
+          set -euo pipefail
+          
           echo "🎯 Starting Datagram Node #${{ matrix.index }}..."
           echo ""
           
@@ -176,21 +187,30 @@ jobs:
           # Graceful Shutdown Handler
           # ============================================
           cleanup() {
+            local exit_code=$?
             echo ""
             echo "═══════════════════════════════════════════════"
-            echo "⚠️  SHUTDOWN SIGNAL RECEIVED"
+            echo "⚠️  SHUTDOWN SIGNAL RECEIVED (exit code: $exit_code)"
             echo "═══════════════════════════════════════════════"
             echo "⏰ Time: $(date '+%Y-%m-%d %H:%M:%S')"
             echo "🛑 Stopping node gracefully..."
             
-            # Kill datagram process
-            pkill -TERM -f datagram-cli || true
+            # Send SIGTERM to datagram-cli
+            pkill -TERM -f datagram-cli 2>/dev/null || true
             
-            # Wait for graceful shutdown
-            sleep 5
+            # Wait for graceful shutdown (max 10 seconds)
+            local wait_count=0
+            while pgrep -f datagram-cli > /dev/null && [ $wait_count -lt 10 ]; do
+              echo "⏳ Waiting for process to stop... ($wait_count/10)"
+              sleep 1
+              wait_count=$((wait_count + 1))
+            done
             
             # Force kill if still running
-            pkill -KILL -f datagram-cli || true
+            if pgrep -f datagram-cli > /dev/null; then
+              echo "⚠️  Force killing remaining processes..."
+              pkill -KILL -f datagram-cli 2>/dev/null || true
+            fi
             
             echo "✅ Node stopped"
             echo "═══════════════════════════════════════════════"
@@ -198,7 +218,7 @@ jobs:
           }
           
           # Trap signals
-          trap cleanup SIGINT SIGTERM SIGHUP
+          trap cleanup SIGINT SIGTERM SIGHUP EXIT
           
           # ============================================
           # Main Loop dengan Auto-Restart
@@ -212,7 +232,7 @@ jobs:
             
             echo ""
             echo "╔═══════════════════════════════════════════════╗"
-            echo "║         ITERATION #$((RESTART_COUNT + 1))                         ║"
+            printf "║         ITERATION #%-3d                        ║\n" $((RESTART_COUNT + 1))
             echo "╚═══════════════════════════════════════════════╝"
             echo "⏰ Timestamp      : $(date '+%Y-%m-%d %H:%M:%S')"
             echo "🔢 Restart Count  : $RESTART_COUNT / $MAX_RETRIES"
@@ -220,10 +240,13 @@ jobs:
             echo "🔑 Using API Key  : ${API_KEY:0:8}...${API_KEY: -6}"
             echo "───────────────────────────────────────────────"
             
-            # Run node dengan timeout 5 jam
+            # Run node dengan timeout dan structured logging
             echo "▶️  Starting datagram-cli..."
-            timeout 5h datagram-cli run -- -key "$API_KEY" 2>&1 | while IFS= read -r line; do
-              echo "[Node #${{ matrix.index }}] $line"
+            
+            timeout ${NODE_TIMEOUT_HOURS}h datagram-cli run -- -key "$API_KEY" 2>&1 | while IFS= read -r line; do
+              # Structured logging dengan timestamp
+              TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+              echo "[$TIMESTAMP] [Node-${{ matrix.index }}] $line"
             done || {
               EXIT_CODE=$?
               ITERATION_END=$(date +%s)
@@ -241,6 +264,10 @@ jobs:
                   ;;
                 0)
                   echo "✅ Clean exit"
+                  ;;
+                143)
+                  echo "🛑 SIGTERM received (graceful shutdown)"
+                  break
                   ;;
                 *)
                   echo "❌ Unexpected exit code: $EXIT_CODE"
@@ -276,6 +303,7 @@ jobs:
           API_KEY: ${{ matrix.api_key }}
           MAX_RETRIES: ${{ env.MAX_RETRIES }}
           RESTART_DELAY: ${{ env.RESTART_DELAY }}
+          NODE_TIMEOUT_HOURS: ${{ env.NODE_TIMEOUT_HOURS }}
 
       - name: 📊 Upload Logs (on failure)
         if: failure()
