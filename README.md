@@ -464,7 +464,7 @@ This project is provided as-is for personal use. Modify and distribute freely.
 ---
 
 **Last Updated:** 2024  
-**Version:** 3.0 (Refactored)  
+**Version:** 3.1 (Security Patched)  
 **Maintained By:** Code-Architect
 
 ---
