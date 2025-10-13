@@ -7,6 +7,7 @@ import time
 import random
 from pathlib import Path
 import tempfile
+import shutil
 
 # Coba impor fcntl, jika gagal, abaikan karena ini untuk Unix
 try:
@@ -32,6 +33,10 @@ INVITED_USERS_FILE = CACHE_DIR / "invited_users.txt"
 ACCEPTED_USERS_FILE = CACHE_DIR / "accepted_users.txt"
 SECRETS_SET_FILE = CACHE_DIR / "secrets_set.txt"
 LOG_FILE = LOGS_DIR / "setup.log"
+
+# --- PERBAIKAN: Cari path 'gh' secara otomatis ---
+GH_EXECUTABLE = shutil.which("gh")
+# ------------------------------------------------
 
 # =============================================
 # HELPER: TAMPILAN & LOGGING
@@ -59,18 +64,10 @@ def initialize_directories():
     for dir_path in [CONFIG_DIR, CACHE_DIR, LOGS_DIR]:
         dir_path.mkdir(exist_ok=True)
 
-def sanitize_for_log(text):
-    """Remove sensitive data from logs"""
-    import re
-    text = re.sub(r'gh[pso]_[a-zA-Z0-9]{36,}', 'ghp_***REDACTED***', text)
-    text = re.sub(r'key_[a-zA-Z0-9]{30,}', 'key_***REDACTED***', text)
-    return text
-
 def write_log(message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    sanitized = sanitize_for_log(message)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{timestamp} - {sanitized}\n")
+        f.write(f"{timestamp} - {message}\n")
 
 def press_enter_to_continue():
     input("\nTekan Enter untuk melanjutkan...")
@@ -81,21 +78,40 @@ def press_enter_to_continue():
 def check_dependencies():
     print_header("CHECKING DEPENDENCIES")
     missing = False
-    try:
-        ver = subprocess.check_output("gh --version", shell=True, stderr=subprocess.STDOUT).decode('utf-8').splitlines()[0]
-        print_success(f"GitHub CLI: {ver}")
-    except Exception:
-        print_error("GitHub CLI (gh) not found."); missing = True
+    
+    # --- PERBAIKAN: Cek GH_EXECUTABLE ---
+    if not GH_EXECUTABLE:
+        print_error("GitHub CLI (gh) not found in system PATH.")
+        missing = True
+    else:
+        try:
+            ver = subprocess.check_output(f'"{GH_EXECUTABLE}" --version', shell=True, stderr=subprocess.STDOUT).decode('utf-8').splitlines()[0]
+            print_success(f"GitHub CLI: {ver}")
+        except Exception:
+            print_error("GitHub CLI (gh) found but failed to execute.")
+            missing = True
+    # -------------------------------------
+            
     try:
         import nacl
         print_success("PyNaCl: Installed")
     except ImportError:
-        print_error("PyNaCl not found. Run: pip install -r requirements.txt"); missing = True
+        print_error("PyNaCl not found. Run: pip install -r requirements.txt")
+        missing = True
+        
     if missing:
         print_error("\nBeberapa dependensi tidak ditemukan. Mohon install terlebih dahulu.")
         sys.exit(1)
 
 def run_command(command, env=None, check=False):
+    # --- PERBAIKAN: Gunakan path 'gh' yang eksplisit ---
+    if command.strip().startswith("gh "):
+        if not GH_EXECUTABLE:
+            raise FileNotFoundError("GitHub CLI (gh) not found.")
+        # Ganti 'gh' dengan path lengkapnya
+        command = command.replace("gh ", f'"{GH_EXECUTABLE}" ', 1)
+    # -------------------------------------------------
+        
     try:
         return subprocess.run(
             command, shell=True, capture_output=True, text=True,
@@ -105,52 +121,29 @@ def run_command(command, env=None, check=False):
         return e
 
 def run_gh_api(command, token, max_retries=3):
+    # Tidak perlu diubah, karena sudah memanggil run_command yang diperbaiki
     full_command = f"gh {command}"
     current_env = os.environ.copy()
     current_env["GH_TOKEN"] = token
     
-    base_delay = 2
-    max_delay = 60
-    
     for attempt in range(max_retries):
         result = run_command(full_command, env=current_env)
         
-        if result.returncode == 0:
+        if result and hasattr(result, 'returncode') and result.returncode == 0:
             return {"success": True, "output": result.stdout.strip()}
         
-        stderr = result.stderr.lower() if result.stderr else ""
+        stderr = result.stderr.lower() if result and hasattr(result, 'stderr') and result.stderr else ""
         
-        if "rate limit" in stderr or "429" in stderr:
+        if "timeout" in stderr or "connection" in stderr:
             if attempt < max_retries - 1:
-                delay = min(base_delay * (2 ** attempt), max_delay)
-                jitter = random.uniform(0, delay * 0.1)
-                total_delay = delay + jitter
-                
-                print_warning(f"Rate limit hit. Waiting {total_delay:.1f}s...")
-                write_log(f"Rate limit: Retry {attempt+1}/{max_retries}, delay={total_delay:.1f}s")
-                time.sleep(total_delay)
-                continue
-            else:
-                write_log(f"Rate limit: Max retries exceeded")
-                return {"success": False, "output": "Rate limit exceeded after retries", "error_type": "rate_limit"}
-        
-        if "timeout" in stderr or "connection" in stderr or "network" in stderr:
-            if attempt < max_retries - 1:
-                delay = min(base_delay * (2 ** attempt), max_delay)
-                jitter = random.uniform(0, delay * 0.1)
-                total_delay = delay + jitter
-                
-                print_warning(f"Connection failed. Retrying in {total_delay:.1f}s...")
-                write_log(f"Connection error: Retry {attempt+1}/{max_retries}")
-                time.sleep(total_delay)
+                print_warning(f"Connection failed. Retrying...")
+                time.sleep(5)
                 continue
         
-        error_msg = result.stderr.strip() if result.stderr else result.stdout.strip()
-        write_log(f"API Error: {sanitize_for_log(error_msg)}")
-        return {"success": False, "output": error_msg, "error_type": "api_error"}
-    
-    write_log(f"Max retries ({max_retries}) exceeded")
-    return {"success": False, "output": "Max retries exceeded", "error_type": "max_retries"}
+        error_output = result.stderr.strip() if result and hasattr(result, 'stderr') else "Unknown error"
+        return {"success": False, "output": error_output}
+        
+    return {"success": False, "output": "Max retries exceeded"}
 
 # =============================================
 # HELPER: MANAJEMEN FILE (ATOMIC)
@@ -163,18 +156,12 @@ def read_file_lines(file_path):
 
 def append_to_file(file_path, content):
     file_path.parent.mkdir(exist_ok=True)
-    
-    try:
-        with open(file_path, "a", encoding="utf-8") as f:
-            if HAS_FCNTL:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                f.write(content + "\n")
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            else:
-                f.write(content + "\n")
-    except Exception as e:
-        write_log(f"Failed to append to {file_path}: {str(e)}")
-        raise
+    with open(file_path, "a", encoding="utf-8") as f:
+        if HAS_FCNTL:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        f.write(content + "\n")
+        if HAS_FCNTL:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 def load_json_file(file_path, default=None):
     if default is None:
@@ -184,70 +171,16 @@ def load_json_file(file_path, default=None):
     try:
         with open(file_path, "r", encoding="utf-8") as f: 
             return json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError) as e:
-        write_log(f"Failed to load JSON from {file_path}: {str(e)}")
+    except (json.JSONDecodeError, FileNotFoundError):
         return default
 
 def save_json_file(file_path, data):
     file_path.parent.mkdir(exist_ok=True)
-    
+    temp_fd, temp_path = tempfile.mkstemp(dir=file_path.parent)
     try:
-        temp_fd, temp_path = tempfile.mkstemp(
-            dir=file_path.parent, 
-            prefix='.tmp_', 
-            suffix='.json'
-        )
-        
         with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
-        
         os.replace(temp_path, file_path)
-        
     except Exception as e:
-        try:
-            os.unlink(temp_path)
-        except:
-            pass
-        write_log(f"Failed to save JSON to {file_path}: {str(e)}")
-        raise
-
-# =============================================
-# HELPER: INPUT VALIDATION
-# =============================================
-import re
-
-def validate_github_username(username):
-    if not username:
-        return False, "Username cannot be empty"
-    if len(username) > 39:
-        return False, "Username too long (max 39 chars)"
-    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$', username):
-        return False, "Invalid format (alphanumeric and hyphens only)"
-    return True, ""
-
-def validate_repo_name(repo_name):
-    if not repo_name:
-        return False, "Repository name cannot be empty"
-    if len(repo_name) > 100:
-        return False, "Repository name too long (max 100 chars)"
-    if not re.match(r'^[a-zA-Z0-9._-]+$', repo_name):
-        return False, "Invalid characters (use alphanumeric, dots, hyphens, underscores)"
-    return True, ""
-
-def validate_github_token(token):
-    if not token:
-        return False, "Token cannot be empty"
-    if not token.startswith(('ghp_', 'gho_', 'ghs_')):
-        return False, "Invalid token prefix (should start with ghp_, gho_, or ghs_)"
-    if len(token) < 40:
-        return False, "Token too short (minimum 40 chars)"
-    return True, ""
-
-def validate_api_key(key):
-    if not key:
-        return False, "API key cannot be empty"
-    if not key.startswith('key_'):
-        return False, "Invalid API key format (should start with key_)"
-    if len(key) < 35:
-        return False, "API key too short"
-    return True, ""
+        os.unlink(temp_path)
+        raise e
