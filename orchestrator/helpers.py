@@ -4,6 +4,7 @@ import sys
 import json
 import subprocess
 import time
+import random
 from pathlib import Path
 
 # =============================================
@@ -50,10 +51,20 @@ def initialize_directories():
     for dir_path in [CONFIG_DIR, CACHE_DIR, LOGS_DIR]:
         dir_path.mkdir(exist_ok=True)
 
+def sanitize_for_log(text):
+    """Remove sensitive data from logs"""
+    import re
+    # Remove tokens (ghp_, gho_, etc)
+    text = re.sub(r'gh[pso]_[a-zA-Z0-9]{36,}', 'ghp_***REDACTED***', text)
+    # Remove API keys (key_ prefix)
+    text = re.sub(r'key_[a-zA-Z0-9]{30,}', 'key_***REDACTED***', text)
+    return text
+
 def write_log(message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    sanitized = sanitize_for_log(message)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{timestamp} - {message}\n")
+        f.write(f"{timestamp} - {sanitized}\n")
 
 def press_enter_to_continue():
     input("\nTekan Enter untuk melanjutkan...")
@@ -88,41 +99,174 @@ def run_command(command, env=None, check=False):
         return e
 
 def run_gh_api(command, token, max_retries=3):
+    """
+    Enhanced GitHub CLI API caller with:
+    - Exponential backoff with jitter
+    - Rate limit handling (HTTP 429)
+    - Connection error retry
+    - Detailed error reporting
+    """
     full_command = f"gh {command}"
     current_env = os.environ.copy()
     current_env["GH_TOKEN"] = token
+    
+    base_delay = 2
+    max_delay = 60
+    
     for attempt in range(max_retries):
         result = run_command(full_command, env=current_env)
+        
         if result.returncode == 0:
             return {"success": True, "output": result.stdout.strip()}
-        stderr = result.stderr.lower()
-        if "timeout" in stderr or "connection" in stderr:
+        
+        stderr = result.stderr.lower() if result.stderr else ""
+        
+        # Check for rate limit (HTTP 429)
+        if "rate limit" in stderr or "429" in stderr:
             if attempt < max_retries - 1:
-                print_warning(f"Connection failed. Retrying...")
-                time.sleep(5)
+                # Exponential backoff: 2, 4, 8... seconds + random jitter
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                jitter = random.uniform(0, delay * 0.1)
+                total_delay = delay + jitter
+                
+                print_warning(f"Rate limit hit. Waiting {total_delay:.1f}s...")
+                write_log(f"Rate limit: Retry {attempt+1}/{max_retries}, delay={total_delay:.1f}s")
+                time.sleep(total_delay)
                 continue
-        return {"success": False, "output": result.stderr.strip() if result.stderr else result.stdout.strip()}
-    return {"success": False, "output": "Max retries exceeded"}
+            else:
+                write_log(f"Rate limit: Max retries exceeded")
+                return {"success": False, "output": "Rate limit exceeded after retries", "error_type": "rate_limit"}
+        
+        # Check for timeout/connection errors
+        if "timeout" in stderr or "connection" in stderr or "network" in stderr:
+            if attempt < max_retries - 1:
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                jitter = random.uniform(0, delay * 0.1)
+                total_delay = delay + jitter
+                
+                print_warning(f"Connection failed. Retrying in {total_delay:.1f}s...")
+                write_log(f"Connection error: Retry {attempt+1}/{max_retries}")
+                time.sleep(total_delay)
+                continue
+        
+        # Other errors - fail immediately
+        error_msg = result.stderr.strip() if result.stderr else result.stdout.strip()
+        write_log(f"API Error: {sanitize_for_log(error_msg)}")
+        return {"success": False, "output": error_msg, "error_type": "api_error"}
+    
+    write_log(f"Max retries ({max_retries}) exceeded")
+    return {"success": False, "output": "Max retries exceeded", "error_type": "max_retries"}
 
 # =============================================
-# HELPER: MANAJEMEN FILE
+# HELPER: MANAJEMEN FILE (ATOMIC)
 # =============================================
+import fcntl  # Unix file locking
+import tempfile
+
 def read_file_lines(file_path):
-    if not file_path.exists(): return []
+    if not file_path.exists(): 
+        return []
     with open(file_path, "r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
 
 def append_to_file(file_path, content):
-    with open(file_path, "a", encoding="utf-8") as f:
-        f.write(content + "\n")
-
-def load_json_file(file_path, default={}):
-    if not file_path.exists(): return default
+    """Atomic append with file locking"""
+    file_path.parent.mkdir(exist_ok=True)
+    
     try:
-        with open(file_path, "r", encoding="utf-8") as f: return json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError): return default
+        with open(file_path, "a", encoding="utf-8") as f:
+            # Try to acquire exclusive lock (Unix/Linux)
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                f.write(content + "\n")
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except (AttributeError, OSError):
+                # Windows fallback - no locking
+                f.write(content + "\n")
+    except Exception as e:
+        write_log(f"Failed to append to {file_path}: {str(e)}")
+        raise
+
+def load_json_file(file_path, default=None):
+    if default is None:
+        default = {}
+    if not file_path.exists(): 
+        return default
+    try:
+        with open(file_path, "r", encoding="utf-8") as f: 
+            return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        write_log(f"Failed to load JSON from {file_path}: {str(e)}")
+        return default
 
 def save_json_file(file_path, data):
+    """Atomic JSON save using temp file + rename"""
     file_path.parent.mkdir(exist_ok=True)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    
+    try:
+        # Write to temp file first
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=file_path.parent, 
+            prefix='.tmp_', 
+            suffix='.json'
+        )
+        
+        with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        
+        # Atomic rename
+        os.replace(temp_path, file_path)
+        
+    except Exception as e:
+        # Cleanup temp file on error
+        try:
+            os.unlink(temp_path)
+        except:
+            pass
+        write_log(f"Failed to save JSON to {file_path}: {str(e)}")
+        raise
+
+# =============================================
+# HELPER: INPUT VALIDATION
+# =============================================
+import re
+
+def validate_github_username(username):
+    """Validate GitHub username format"""
+    if not username:
+        return False, "Username cannot be empty"
+    if len(username) > 39:
+        return False, "Username too long (max 39 chars)"
+    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$', username):
+        return False, "Invalid format (alphanumeric and hyphens only)"
+    return True, ""
+
+def validate_repo_name(repo_name):
+    """Validate repository name format"""
+    if not repo_name:
+        return False, "Repository name cannot be empty"
+    if len(repo_name) > 100:
+        return False, "Repository name too long (max 100 chars)"
+    if not re.match(r'^[a-zA-Z0-9._-]+$', repo_name):
+        return False, "Invalid characters (use alphanumeric, dots, hyphens, underscores)"
+    return True, ""
+
+def validate_github_token(token):
+    """Validate GitHub token format"""
+    if not token:
+        return False, "Token cannot be empty"
+    if not token.startswith(('ghp_', 'gho_', 'ghs_')):
+        return False, "Invalid token prefix (should start with ghp_, gho_, or ghs_)"
+    if len(token) < 40:
+        return False, "Token too short (minimum 40 chars)"
+    return True, ""
+
+def validate_api_key(key):
+    """Validate Datagram API key format"""
+    if not key:
+        return False, "API key cannot be empty"
+    if not key.startswith('key_'):
+        return False, "Invalid API key format (should start with key_)"
+    if len(key) < 35:
+        return False, "API key too short"
+    return True, ""
