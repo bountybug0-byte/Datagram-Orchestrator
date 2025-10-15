@@ -120,9 +120,9 @@ def get_user_repos_matching_pattern(token: str, repo_name: str) -> list:
     Returns:
         List of repo names yang match pattern
     """
-    # Gunakan user/repos untuk authenticated user dengan paginate
+    # Gunakan user/repos dengan jq untuk extract names
     result = run_gh_api(
-        f"api user/repos --paginate -q '.[].name'",
+        "api user/repos --paginate --jq '.[].name'",
         token,
         max_retries=2,
         timeout=60
