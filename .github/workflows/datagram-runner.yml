@@ -34,6 +34,8 @@ jobs:
   check-billing:
     name: 🔒 Billing Quota Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Verify Actions Usage
         run: |
@@ -42,19 +44,73 @@ jobs:
           echo "🔍 CHECKING GITHUB ACTIONS BILLING USAGE"
           echo "════════════════════════════════════════════════"
           
-          USERNAME="${{ github.repository_owner }}"
+          OWNER="${{ github.repository_owner }}"
           REPO="${{ github.repository }}"
           WORKFLOW_FILE="datagram-runner.yml"
           
-          echo "📊 Fetching billing data for user: $USERNAME"
+          echo "📊 Fetching billing data for repository: $REPO"
           
-          BILLING_DATA=$(gh api "/users/$USERNAME/settings/billing/usage" 2>&1) || {
-            echo "❌ Failed to fetch billing data"
-            echo "💡 Ensure GITHUB_TOKEN has proper permissions"
-            exit 1
+          BILLING_DATA=$(gh api "/repos/$REPO/actions/billing/usage" 2>&1) || {
+            echo "⚠️  Unable to fetch repository billing data"
+            echo "💡 This may be due to:"
+            echo "   • Repository is not part of an organization with billing API access"
+            echo "   • Token lacks required permissions"
+            echo ""
+            echo "🔄 Attempting alternative: Check workflow runs history..."
+            
+            RECENT_RUNS=$(gh api "/repos/$REPO/actions/runs?per_page=100" --jq '[.workflow_runs[] | select(.conclusion != null)] | length')
+            TOTAL_DURATION=$(gh api "/repos/$REPO/actions/runs?per_page=100" --jq '[.workflow_runs[] | select(.conclusion != null) | ((.updated_at | fromdateiso8601) - (.created_at | fromdateiso8601))] | add // 0')
+            ESTIMATED_MINUTES=$((TOTAL_DURATION / 60))
+            
+            echo "✅ Workflow history retrieved"
+            echo "───────────────────────────────────────────────"
+            echo "📊 Recent completed runs: $RECENT_RUNS"
+            echo "⏱️  Estimated total duration: $ESTIMATED_MINUTES minutes"
+            echo "🎯 Safety threshold: ${{ env.BILLING_THRESHOLD }} minutes"
+            echo "───────────────────────────────────────────────"
+            
+            if [ "$ESTIMATED_MINUTES" -ge "${{ env.BILLING_THRESHOLD }}" ]; then
+              echo ""
+              echo "╔═══════════════════════════════════════════════╗"
+              echo "║           ⚠️  QUOTA LIMIT REACHED ⚠️          ║"
+              echo "╚═══════════════════════════════════════════════╝"
+              echo ""
+              echo "❌ CRITICAL: Estimated usage ($ESTIMATED_MINUTES min) exceeds threshold"
+              echo "🛑 Initiating automatic workflow shutdown..."
+              echo ""
+              
+              echo "📡 Fetching workflow ID..."
+              WORKFLOW_ID=$(gh api "/repos/$REPO/actions/workflows" --jq ".workflows[] | select(.path | endswith(\"$WORKFLOW_FILE\")) | .id")
+              
+              if [ -n "$WORKFLOW_ID" ]; then
+                echo "🔧 Workflow ID: $WORKFLOW_ID"
+                echo "🔒 Disabling workflow..."
+                
+                gh api --method PUT "/repos/$REPO/actions/workflows/$WORKFLOW_ID/disable" 2>&1 || {
+                  echo "⚠️  Failed to disable workflow via API"
+                }
+                
+                echo ""
+                echo "════════════════════════════════════════════════"
+                echo "✅ Workflow disabled"
+                echo "💡 Re-enable at: https://github.com/$REPO/actions/workflows/$WORKFLOW_FILE"
+                echo "════════════════════════════════════════════════"
+              fi
+              
+              echo ""
+              exit 1
+            else
+              REMAINING=$((BILLING_THRESHOLD - ESTIMATED_MINUTES))
+              echo ""
+              echo "✅ QUOTA CHECK PASSED (Estimated)"
+              echo "📈 Estimated remaining buffer: $REMAINING minutes"
+              echo "🚀 Proceeding with workflow execution..."
+              echo "════════════════════════════════════════════════"
+              exit 0
+            fi
           }
           
-          TOTAL_MINUTES=$(echo "$BILLING_DATA" | jq '[.[] | select(.product == "actions" and .unitType == "Minutes") | .quantity] | add // 0')
+          TOTAL_MINUTES=$(echo "$BILLING_DATA" | jq '.total_minutes_used // 0')
           
           echo "✅ Billing data retrieved successfully"
           echo "───────────────────────────────────────────────"
