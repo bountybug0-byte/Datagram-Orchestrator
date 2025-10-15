@@ -112,6 +112,60 @@ def invoke_auto_accept():
 
     print_success(f"\nProses selesai! Invitation baru diterima: {accepted_count}")
 
+def check_if_fork(repo_path: str, token: str, expected_parent: str) -> dict:
+    """
+    Cek apakah repo adalah true fork dari parent yang diharapkan.
+    
+    Returns:
+        dict dengan keys:
+        - exists (bool): Apakah repo ada
+        - is_fork (bool): Apakah repo adalah fork
+        - is_correct_fork (bool): Apakah fork dari parent yang benar
+        - parent (str): Nama parent repo jika ada
+    """
+    result = run_gh_api(
+        f"api repos/{repo_path} --jq '{{fork: .fork, parent: .parent.full_name}}'",
+        token,
+        max_retries=1
+    )
+    
+    if not result["success"]:
+        return {
+            'exists': False,
+            'is_fork': False,
+            'is_correct_fork': False,
+            'parent': None
+        }
+    
+    try:
+        data = json.loads(result["output"])
+        is_fork = data.get('fork', False)
+        parent = data.get('parent', '').strip() if data.get('parent') else None
+        is_correct_fork = parent == expected_parent if parent else False
+        
+        return {
+            'exists': True,
+            'is_fork': is_fork,
+            'is_correct_fork': is_correct_fork,
+            'parent': parent
+        }
+    except (json.JSONDecodeError, KeyError):
+        return {
+            'exists': True,
+            'is_fork': False,
+            'is_correct_fork': False,
+            'parent': None
+        }
+
+def delete_repository(repo_path: str, token: str) -> bool:
+    """Menghapus repository."""
+    result = run_gh_api(
+        f"api -X DELETE repos/{repo_path}",
+        token,
+        max_retries=1
+    )
+    return result["success"]
+
 def get_default_branch(repo_path: str, token: str) -> str:
     """Mendapatkan nama branch default dari repository."""
     result = run_gh_api(f"api repos/{repo_path} --jq '.default_branch'", token, max_retries=1)
@@ -119,14 +173,14 @@ def get_default_branch(repo_path: str, token: str) -> str:
         return result["output"].strip().strip('"')
     return "main"
 
-def sync_fork_with_upstream(fork_repo: str, token: str, default_branch: str) -> bool:
-    """Sinkronisasi fork dengan upstream menggunakan berbagai strategi."""
+def sync_fork_with_upstream(fork_repo: str, token: str) -> bool:
+    """Sinkronisasi fork dengan upstream."""
+    default_branch = get_default_branch(fork_repo, token)
     
-    # Strategy 1: Gunakan merge-upstream API
     sync_result = run_gh_api(
         f"api -X POST repos/{fork_repo}/merge-upstream -f branch={default_branch}",
         token,
-        max_retries=1
+        max_retries=2
     )
     
     if sync_result["success"]:
@@ -138,36 +192,16 @@ def sync_fork_with_upstream(fork_repo: str, token: str, default_branch: str) -> 
     if any(keyword in error_msg for keyword in ['up-to-date', 'up to date', 'already']):
         return True
     
-    # Strategy 2: Gunakan compare API untuk cek status
-    repo_parts = fork_repo.split('/')
-    username = repo_parts[0]
-    repo_name = repo_parts[1]
-    
-    # Ambil info parent repo
-    parent_info = run_gh_api(f"api repos/{fork_repo} --jq '.parent.full_name'", token, max_retries=1)
-    if parent_info["success"] and parent_info["output"].strip():
-        parent_repo = parent_info["output"].strip().strip('"')
-        
-        # Cek apakah ada commits baru di upstream
-        compare_result = run_gh_api(
-            f"api repos/{fork_repo}/compare/{username}:{default_branch}...{parent_repo.replace('/', ':')}:{default_branch} --jq '.behind_by'",
-            token,
-            max_retries=1
-        )
-        
-        if compare_result["success"]:
-            try:
-                behind_by = int(compare_result["output"].strip())
-                if behind_by == 0:
-                    return True  # Sudah up-to-date
-            except (ValueError, AttributeError):
-                pass
-    
-    # Strategy 3: Fallback - anggap berhasil jika error bukan critical
-    if 'not found' not in error_msg and 'forbidden' not in error_msg and 'unauthorized' not in error_msg:
-        return True
-    
     return False
+
+def set_repo_public(repo_path: str, token: str) -> bool:
+    """Set repository visibility menjadi public."""
+    result = run_gh_api(
+        f"api -X PATCH repos/{repo_path} -f private=false",
+        token,
+        max_retries=1
+    )
+    return result["success"] or "unprocessable" in result.get("error", "").lower()
 
 def invoke_auto_create_or_sync_fork():
     """Membuat atau menyinkronkan fork repository utama ke semua akun kolaborator."""
@@ -199,37 +233,58 @@ def invoke_auto_create_or_sync_fork():
         print(f"[{i}/{len(users_to_process)}] Processing @{username}...", end="", flush=True)
         fork_repo = f"{username}/{config['main_repo_name']}"
 
-        # Cek apakah fork sudah ada
-        check_result = run_gh_api(f"api repos/{fork_repo}", token, max_retries=1)
-        fork_exists = check_result["success"]
+        # Cek status repo
+        repo_status = check_if_fork(fork_repo, token, source_repo)
 
-        if fork_exists:
-            print_info(" 🔄 Syncing...")
-            
-            # Deteksi branch default
-            default_branch = get_default_branch(fork_repo, token)
-            
-            # Sinkronisasi fork dengan upstream
-            if sync_fork_with_upstream(fork_repo, token, default_branch):
-                print_success(" ✅ Synced")
+        if repo_status['exists']:
+            if repo_status['is_correct_fork']:
+                # Repo adalah true fork dari source yang benar - lakukan sync
+                print_info(" 🔄 Syncing...")
+                
+                if sync_fork_with_upstream(fork_repo, token):
+                    print_success(" ✅ Synced")
+                else:
+                    print_warning(" ⚠️ Sync failed")
+                
+                # Set public
+                if set_repo_public(fork_repo, token):
+                    print_info(" 🔓")
+                
+                if username not in forked_users:
+                    append_to_file(FORKED_REPOS_FILE, username)
+                success_count += 1
+                
             else:
-                print_warning(" ⚠️ Sync skipped")
-            
-            # Pastikan visibilitas publik
-            visibility_result = run_gh_api(
-                f"api -X PATCH repos/{fork_repo} -f private=false",
-                token,
-                max_retries=1
-            )
-            
-            if visibility_result["success"] or "unprocessable" in visibility_result.get("error", "").lower():
-                print_info(" 🔓 Public")
-            
-            if username not in forked_users:
-                append_to_file(FORKED_REPOS_FILE, username)
-            success_count += 1
+                # Repo exists tapi BUKAN fork atau fork dari repo lain - hapus dulu
+                if repo_status['is_fork']:
+                    print_warning(f" ⚠️ Wrong fork (from {repo_status['parent']}), deleting...")
+                else:
+                    print_warning(" ⚠️ Not a fork, deleting...")
+                
+                if delete_repository(fork_repo, token):
+                    print_info(" 🗑️ Deleted")
+                    time.sleep(3)
+                    
+                    # Buat fork baru setelah hapus
+                    print_info(" 🍴 Creating fork...")
+                    result = run_gh_api(f"api -X POST repos/{source_repo}/forks", token, max_retries=2)
+                    
+                    if result["success"]:
+                        print_success(" ✅ Created")
+                        time.sleep(5)
+                        
+                        # Set public (TIDAK sync untuk fork baru)
+                        if set_repo_public(fork_repo, token):
+                            print_info(" 🔓")
+                        
+                        append_to_file(FORKED_REPOS_FILE, username)
+                        success_count += 1
+                    else:
+                        print_error(f" ❌ Create failed: {result.get('error')}")
+                else:
+                    print_error(" ❌ Delete failed")
         else:
-            # Buat fork baru
+            # Repo tidak ada - buat fork baru
             print_info(" 🍴 Creating...")
             result = run_gh_api(f"api -X POST repos/{source_repo}/forks", token, max_retries=2)
             
@@ -237,25 +292,17 @@ def invoke_auto_create_or_sync_fork():
                 print_success(" ✅ Created")
                 time.sleep(5)
                 
-                # Set visibility menjadi publik
-                visibility_result = run_gh_api(
-                    f"api -X PATCH repos/{fork_repo} -f private=false",
-                    token,
-                    max_retries=2
-                )
-                
-                if visibility_result["success"] or "unprocessable" in visibility_result.get("error", "").lower():
-                    print_info(" 🔓 Public")
+                # Set public (TIDAK sync untuk fork baru)
+                if set_repo_public(fork_repo, token):
+                    print_info(" 🔓")
                 
                 append_to_file(FORKED_REPOS_FILE, username)
                 success_count += 1
             else:
                 error_msg = result.get('error', '')
-                if "already exists" in error_msg.lower() or "fork exists" in error_msg.lower():
-                    print_success(" ✅ Exists")
-                    if username not in forked_users:
-                        append_to_file(FORKED_REPOS_FILE, username)
-                    success_count += 1
+                if "name already exists" in error_msg.lower():
+                    # Race condition - repo baru saja dibuat, coba lagi di iterasi berikutnya
+                    print_warning(" ⚠️ Exists (retry next time)")
                 else:
                     print_error(f" ❌ {error_msg}")
 
