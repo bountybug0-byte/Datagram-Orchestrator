@@ -1,11 +1,13 @@
 # orchestrator/utils.py
 
+import json
 from .helpers import (
     print_success,
     print_error,
     print_info,
     print_warning,
     print_header,
+    run_gh_api,
     LOGS_DIR,
     TOKEN_CACHE_FILE,
     INVITED_USERS_FILE,
@@ -14,6 +16,45 @@ from .helpers import (
     SECRETS_SET_FILE,
     WORKFLOWS_ENABLED_FILE
 )
+
+def check_actions_usage(username: str, token: str) -> int:
+    """
+    Mengecek penggunaan GitHub Actions (dalam menit) untuk user tertentu.
+    
+    Args:
+        username: GitHub username
+        token: GitHub personal access token
+        
+    Returns:
+        Total menit Actions yang telah digunakan
+    """
+    result = run_gh_api(
+        f"api /users/{username}/settings/billing/usage",
+        token,
+        timeout=30
+    )
+    
+    if not result["success"]:
+        print_warning(f"⚠️ Gagal mengambil data billing untuk {username}: {result.get('error')}")
+        return 0
+    
+    try:
+        billing_data = json.loads(result["output"])
+        total_minutes = 0
+        
+        # Parse semua item usage
+        if "usage" in billing_data:
+            for item in billing_data["usage"]:
+                if (item.get("product") == "actions" and 
+                    item.get("unitType") == "Minutes"):
+                    total_minutes += item.get("quantity", 0)
+        
+        return int(total_minutes)
+    
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        print_warning(f"⚠️ Error parsing billing data untuk {username}: {str(e)}")
+        return 0
+
 
 def view_logs():
     """Menampilkan 50 baris terakhir dari file log."""
@@ -36,6 +77,7 @@ def view_logs():
             print(line.strip())
     except Exception as e:
         print_error(f"Error membaca log: {str(e)}")
+
 
 def clean_cache():
     """Menghapus file cache yang dipilih atau semua cache."""
