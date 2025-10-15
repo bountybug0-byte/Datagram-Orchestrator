@@ -120,22 +120,37 @@ def get_user_repos_matching_pattern(username: str, token: str, repo_name: str) -
     Returns:
         List of repo names yang match pattern
     """
+    # Gunakan per_page=100 untuk dapat lebih banyak repos sekaligus
     result = run_gh_api(
-        f"api user/repos --paginate --jq '.[].name'",
+        f"api repos/{username} --paginate -q '.[].name'",
         token,
-        max_retries=1
+        max_retries=2,
+        timeout=60
     )
     
     if not result["success"]:
+        print_warning(f"\n    ⚠️ Failed to fetch repos: {result.get('error')}")
+        return []
+    
+    if not result["output"].strip():
+        print_warning("\n    ⚠️ No repos found in user account")
         return []
     
     matching_repos = []
-    pattern = re.compile(rf'^{re.escape(repo_name)}(-\d+)?$')
+    # Pattern: exact match atau dengan suffix -1, -2, dst
+    pattern = re.compile(rf'^{re.escape(repo_name)}(-\d+)?$', re.IGNORECASE)
     
-    for line in result["output"].strip().split('\n'):
-        repo = line.strip().strip('"')
+    lines = result["output"].strip().split('\n')
+    print_info(f"\n    🔍 Scanning {len(lines)} repos...")
+    
+    for line in lines:
+        if not line.strip():
+            continue
+        # Hapus quotes dan whitespace
+        repo = line.strip().strip('"').strip("'")
         if pattern.match(repo):
             matching_repos.append(repo)
+            print_warning(f"    ⚠️ Found: {repo}")
     
     return matching_repos
 
@@ -144,7 +159,8 @@ def delete_repository(repo_path: str, token: str) -> bool:
     result = run_gh_api(
         f"api -X DELETE repos/{repo_path}",
         token,
-        max_retries=1
+        max_retries=2,
+        timeout=30
     )
     return result["success"]
 
@@ -208,7 +224,10 @@ def force_cleanup_all_matching_repos(username: str, token: str, repo_name: str, 
     matching_repos = get_user_repos_matching_pattern(username, token, repo_name)
     
     if not matching_repos:
+        print_info("\n    ℹ️ No matching repos to clean")
         return 0
+    
+    print_warning(f"\n    🎯 Found {len(matching_repos)} repo(s) to clean")
     
     deleted_count = 0
     for repo in matching_repos:
@@ -217,15 +236,18 @@ def force_cleanup_all_matching_repos(username: str, token: str, repo_name: str, 
         # Cek apakah ini fork yang valid
         is_valid_fork = check_if_correct_fork(repo_path, token, source_repo)
         
-        if not is_valid_fork:
-            # Force delete tanpa pertanyaan
-            print_info(f"\n    🗑️ Force deleting {repo}...")
-            if delete_repository(repo_path, token):
-                print_success("    ✅ Deleted")
-                deleted_count += 1
-                time.sleep(1)
-            else:
-                print_error("    ❌ Delete failed")
+        if is_valid_fork:
+            print_success(f"    ✅ Keeping valid fork: {repo}")
+            continue
+        
+        # Force delete repo yang bukan fork valid
+        print_warning(f"    🗑️ Deleting: {repo}")
+        if delete_repository(repo_path, token):
+            print_success(f"    ✅ Deleted: {repo}")
+            deleted_count += 1
+            time.sleep(2)
+        else:
+            print_error(f"    ❌ Failed to delete: {repo}")
     
     return deleted_count
 
@@ -257,7 +279,7 @@ def invoke_auto_create_or_sync_fork():
     success_count = 0
 
     for i, (username, token) in enumerate(users_to_process.items(), 1):
-        print(f"[{i}/{len(users_to_process)}] Processing @{username}...", end="", flush=True)
+        print(f"\n[{i}/{len(users_to_process)}] Processing @{username}...", end="", flush=True)
         fork_repo = f"{username}/{repo_name}"
 
         # Cek apakah repo utama adalah fork yang valid
@@ -286,27 +308,27 @@ def invoke_auto_create_or_sync_fork():
             deleted = force_cleanup_all_matching_repos(username, token, repo_name, source_repo)
             
             if deleted > 0:
-                print_info(f" 🗑️ Deleted {deleted} repo(s)")
+                print_success(f"\n    ✅ Cleaned {deleted} repo(s)")
                 time.sleep(3)
             
             # Buat fork baru
-            print_info(" 🍴 Creating fork...")
+            print_info("\n    🍴 Creating fork...")
             result = run_gh_api(f"api -X POST repos/{source_repo}/forks", token, max_retries=2)
             
             if result["success"]:
-                print_success(" ✅ Created")
+                print_success("    ✅ Created")
                 time.sleep(5)
                 
                 # Set public
                 if set_repo_public(fork_repo, token):
-                    print_info(" 🔓")
+                    print_info("    🔓 Set public")
                 
                 append_to_file(FORKED_REPOS_FILE, username)
                 success_count += 1
             else:
                 error_msg = result.get('error', '')
-                print_error(f" ❌ {error_msg}")
+                print_error(f"    ❌ {error_msg}")
 
         time.sleep(2)
 
-    print_success(f"\nProses selesai! Berhasil: {success_count}/{len(users_to_process)}")
+    print_success(f"\n{'='*47}\n✅ Proses selesai! Berhasil: {success_count}/{len(users_to_process)}\n{'='*47}")
