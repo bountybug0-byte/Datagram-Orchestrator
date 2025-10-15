@@ -1,196 +1,123 @@
-# File: orchestrator/core.py
 import json
 import getpass
 import time
-import base64
 from pathlib import Path
-from typing import Dict, List, Optional
-
+from typing import Dict, List, Any
 from .helpers import (
     print_success, print_error, print_info, print_warning, print_header,
     write_log, run_gh_api, read_file_lines, append_to_file,
     load_json_file, save_json_file, run_command, validate_api_key_format,
     API_KEYS_FILE, TOKENS_FILE, CONFIG_FILE, TOKEN_CACHE_FILE,
-    INVITED_USERS_FILE, ACCEPTED_USERS_FILE, SECRETS_SET_FILE
+    INVITED_USERS_FILE, ACCEPTED_USERS_FILE, FORKED_REPOS_FILE,
+    SECRETS_SET_FILE
 )
 
 def initialize_configuration():
     print_header("1. INITIALIZE CONFIGURATION")
     config = {}
     config['main_account_username'] = input("Username GitHub utama: ").strip()
-    config['main_repo_name'] = input("Nama repository (e.g., datagram-runner): ").strip()
-    print_warning("\n⚠️  Token akan disembunyikan saat diketik")
+    config['main_repo_name'] = input("Nama repository: ").strip()
+    print_warning("\n⚠️ Token akan disembunyikan saat diketik")
     config['main_token'] = getpass.getpass("GitHub Personal Access Token: ").strip()
-
-    if not config['main_account_username'] or not config['main_repo_name'] or not config['main_token']:
-        print_error("Semua field harus diisi!")
-        return
-
+    if not all(config.values()):
+        print_error("Semua field harus diisi!"); return
     print_info("Memvalidasi token...")
-    result = run_gh_api("api user --jq .login", config['main_token'], max_retries=2)
-
+    result = run_gh_api("api user", config['main_token'], max_retries=2)
     if not result["success"]:
-        print_error(f"Token tidak valid: {result['error']}")
-        return
-
-    username = result["output"]
-    if username != config['main_account_username']:
-        print_warning(f"Username token ({username}) tidak sama dengan yang diinput ({config['main_account_username']})")
-        if input("Lanjutkan? (y/n): ").lower() != 'y':
-            return
-
+        print_error(f"Token tidak valid: {result['error']}"); return
     save_json_file(CONFIG_FILE, config)
-    print_success(f"✅ Konfigurasi berhasil disimpan!")
-    print_info(f"📁 Lokasi: {CONFIG_FILE}")
-    write_log(f"Configuration initialized for @{config['main_account_username']}")
+    print_success(f"✅ Konfigurasi berhasil disimpan di {CONFIG_FILE}")
 
 def import_api_keys():
     print_header("2. IMPORT API KEYS")
-    print("Pilih metode import:")
-    print("  1. Input manual (satu per satu)")
-    print("  2. Import dari file .txt")
+    print("Pilih metode:\n 1. Input manual\n 2. Import dari file .txt")
     choice = input("\nPilihan (1/2): ").strip()
-
+    keys = []
     if choice == '1':
-        keys = []
         print_info("Masukkan API key (kosongkan untuk selesai)")
         while True:
             key = input(f"API Key #{len(keys) + 1}: ").strip()
-            if not key:
-                break
+            if not key: break
             if not validate_api_key_format(key):
-                print_warning("⚠️  Format API key tidak valid, skip...")
+                print_warning("⚠️ Format API key tidak valid, skip...")
                 continue
             keys.append(key)
-
-        if keys:
-            API_KEYS_FILE.write_text("\n".join(keys), encoding="utf-8")
-            print_success(f"✅ Berhasil menyimpan {len(keys)} API key(s)")
-            write_log(f"Imported {len(keys)} API keys manually")
-        else:
-            print_warning("Tidak ada API key yang diinput.")
-
     elif choice == '2':
         source_file = input("Masukkan path ke file .txt: ").strip()
-        source_path = Path(source_file)
-        if not source_path.is_file():
-            print_error(f"File tidak ditemukan: {source_file}")
-            return
-        try:
-            content = source_path.read_text(encoding="utf-8")
-            keys = [line.strip() for line in content.splitlines() if line.strip()]
-            valid_keys = [k for k in keys if validate_api_key_format(k)]
-            invalid_count = len(keys) - len(valid_keys)
-            if valid_keys:
-                API_KEYS_FILE.write_text("\n".join(valid_keys), encoding="utf-8")
-                print_success(f"✅ Berhasil mengimpor {len(valid_keys)} API key(s)")
-                if invalid_count > 0:
-                    print_warning(f"⚠️  {invalid_count} key tidak valid (diabaikan)")
-                write_log(f"Imported {len(valid_keys)} API keys from file")
-            else:
-                print_error("Tidak ada API key valid yang ditemukan.")
-        except Exception as e:
-            print_error(f"Error membaca file: {str(e)}")
+        if not Path(source_file).is_file():
+            print_error(f"File tidak ditemukan: {source_file}"); return
+        keys = read_file_lines(Path(source_file))
     else:
-        print_warning("Pilihan tidak valid.")
+        print_warning("Pilihan tidak valid."); return
+    valid_keys = [k for k in keys if k and len(k) > 10]
+    if valid_keys:
+        API_KEYS_FILE.write_text("\n".join(valid_keys), encoding="utf-8")
+        print_success(f"✅ Berhasil menyimpan {len(valid_keys)} API key(s)")
+    else:
+        print_warning("Tidak ada API key valid yang diinput.")
 
 def show_api_keys_status():
     print_header("3. SHOW API KEYS STATUS")
     if not API_KEYS_FILE.exists():
-        print_warning("File API keys belum ada.")
-        return
+        print_warning("File API keys belum ada."); return
     keys = read_file_lines(API_KEYS_FILE)
-    if not keys:
-        print_warning("File API keys kosong.")
-        return
     print_success(f"Total API Keys: {len(keys)}")
-    print_info("\nPreview (3 key pertama):")
-    for i, key in enumerate(keys[:3], 1):
-        masked_key = f"{key[:8]}...{key[-6:]}" if len(key) > 14 else "***"
-        print(f"  {i}. 🔑 {masked_key}")
-    if len(keys) > 3:
-        print_info(f"  ... dan {len(keys) - 3} key lainnya")
+    if keys:
+        print_info("\nPreview (3 key pertama):")
+        for i, key in enumerate(keys[:3], 1):
+            print(f"  {i}. {key[:8]}...{key[-6:]}")
 
 def import_github_tokens():
     print_header("4. IMPORT GITHUB TOKENS")
     source_file = input("Masukkan path ke file .txt berisi token: ").strip()
-    source_path = Path(source_file)
-    if not source_path.is_file():
-        print_error(f"File tidak ditemukan: {source_file}")
-        return
-    try:
-        content = source_path.read_text(encoding="utf-8")
-        all_lines = [line.strip() for line in content.splitlines() if line.strip()]
-        tokens = [line for line in all_lines if line.startswith("ghp_") or line.startswith("github_pat_")]
-        if tokens:
-            TOKENS_FILE.write_text("\n".join(tokens), encoding="utf-8")
-            print_success(f"✅ Berhasil mengimpor {len(tokens)} token")
-            write_log(f"Imported {len(tokens)} GitHub tokens")
-        else:
-            print_error("Tidak ada token valid (ghp_* atau github_pat_*) ditemukan.")
-    except Exception as e:
-        print_error(f"Error membaca file: {str(e)}")
+    if not Path(source_file).is_file():
+        print_error(f"File tidak ditemukan: {source_file}"); return
+    tokens = [line for line in read_file_lines(Path(source_file)) if line.startswith(("ghp_", "github_pat_"))]
+    if tokens:
+        TOKENS_FILE.write_text("\n".join(tokens), encoding="utf-8")
+        print_success(f"✅ Berhasil mengimpor {len(tokens)} token")
+    else:
+        print_error("Tidak ada token valid ditemukan.")
 
 def validate_github_tokens():
     print_header("5. VALIDATE GITHUB TOKENS")
     if not TOKENS_FILE.exists():
-        print_error("File tokens.txt belum ada. Import tokens terlebih dahulu.")
-        return
+        print_error("File tokens.txt belum ada."); return
     tokens = read_file_lines(TOKENS_FILE)
-    if not tokens:
-        print_error("File tokens.txt kosong.")
-        return
     print_info(f"Memvalidasi {len(tokens)} token...")
     token_cache = load_json_file(TOKEN_CACHE_FILE)
-    valid_count = 0
-    invalid_tokens = []
-
+    valid_tokens, invalid_tokens = [], []
     for i, token in enumerate(tokens, 1):
-        print(f"[{i}/{len(tokens)}] Validating token...", end="", flush=True)
+        print(f"[{i}/{len(tokens)}] Validating...", end="", flush=True)
         if token in token_cache:
-            print_success(f" ✅ @{token_cache[token]} (cached)")
-            valid_count += 1
-            continue
+            print_success(f" ✅ @{token_cache[token]} (cached)"); valid_tokens.append(token); continue
         result = run_gh_api("api user --jq .login", token, max_retries=2)
         if result["success"]:
             username = result["output"]
             print_success(f" ✅ @{username}")
             token_cache[token] = username
-            valid_count += 1
+            valid_tokens.append(token)
         else:
-            print_error(f" ❌ Invalid")
-            invalid_tokens.append(token)
-        time.sleep(0.5)
-
+            print_error(f" ❌ Invalid"); invalid_tokens.append(token)
     save_json_file(TOKEN_CACHE_FILE, token_cache)
-    print("\n" + "═" * 47)
-    print_success(f"Validasi selesai! Valid: {valid_count}/{len(tokens)}")
-    if invalid_tokens:
-        print_warning(f"⚠️  {len(invalid_tokens)} token tidak valid")
-        if input("\nHapus token invalid dari file? (y/n): ").lower() == 'y':
-            valid_tokens = [t for t in tokens if t not in invalid_tokens]
-            TOKENS_FILE.write_text("\n".join(valid_tokens), encoding="utf-8")
-            print_success("Token invalid telah dihapus.")
-    write_log(f"Token validation completed: {valid_count} valid, {len(invalid_tokens)} invalid")
+    print_success(f"\nValidasi selesai! Valid: {len(valid_tokens)}/{len(tokens)}")
+    if invalid_tokens and input("\nHapus token invalid dari file? (y/n): ").lower() == 'y':
+        TOKENS_FILE.write_text("\n".join(valid_tokens), encoding="utf-8")
+        print_success("Token invalid telah dihapus.")
 
 def invoke_auto_invite():
     print_header("6. AUTO INVITE COLLABORATORS")
     config = load_json_file(CONFIG_FILE)
-    if not config:
-        print_error("Konfigurasi belum diset. Jalankan menu 1 terlebih dahulu.")
-        return
+    if not config: print_error("Konfigurasi belum diset."); return
     token_cache = load_json_file(TOKEN_CACHE_FILE)
-    if not token_cache:
-        print_error("Token cache kosong. Validasi tokens terlebih dahulu (menu 5).")
-        return
+    if not token_cache: print_error("Token cache kosong."); return
     invited_users = read_file_lines(INVITED_USERS_FILE)
     main_username = config['main_account_username']
-    users_to_invite = [username for username in token_cache.values() if username not in invited_users and username != main_username]
+    users_to_invite = [u for u in token_cache.values() if u not in invited_users and u != main_username]
     if not users_to_invite:
-        print_success("✅ Semua akun sudah diundang sebagai collaborator.")
-        return
+        print_success("✅ Semua akun sudah diundang."); return
     print_info(f"Akan mengundang {len(users_to_invite)} user baru...")
-    repo_path = f"{config['main_account_username']}/{config['main_repo_name']}"
+    repo_path = f"{main_username}/{config['main_repo_name']}"
     success_count = 0
     for i, username in enumerate(users_to_invite, 1):
         print(f"[{i}/{len(users_to_invite)}] Mengundang @{username}...", end="", flush=True)
@@ -202,21 +129,17 @@ def invoke_auto_invite():
         else:
             print_error(f" ❌ {result['error']}")
         time.sleep(1)
-    print("\n" + "═" * 47)
-    print_success(f"Proses selesai! Berhasil: {success_count}/{len(users_to_invite)}")
-    write_log(f"Auto invite completed: {success_count} successful")
+    print_success(f"\nProses selesai! Berhasil: {success_count}/{len(users_to_invite)}")
 
 def invoke_auto_accept():
     print_header("7. AUTO ACCEPT INVITATIONS")
     config = load_json_file(CONFIG_FILE)
     token_cache = load_json_file(TOKEN_CACHE_FILE)
     if not config or not token_cache:
-        print_error("Konfigurasi atau token cache tidak ditemukan.")
-        return
+        print_error("Konfigurasi atau token cache tidak ditemukan."); return
     target_repo = f"{config['main_account_username']}/{config['main_repo_name']}".lower()
     accepted_users = read_file_lines(ACCEPTED_USERS_FILE)
-    print_info(f"Target repository: {target_repo}")
-    print_info(f"Mengecek {len(token_cache)} akun...\n")
+    print_info(f"Target: {target_repo}\nMengecek {len(token_cache)} akun...")
     accepted_count = 0
     for i, (token, username) in enumerate(token_cache.items(), 1):
         if username in accepted_users:
@@ -225,16 +148,10 @@ def invoke_auto_accept():
         print(f"[{i}/{len(token_cache)}] @{username}...", end="", flush=True)
         result = run_gh_api("api user/repository_invitations", token)
         if not result["success"]:
-            print_error(f" ❌ Gagal fetch invitations")
-            continue
+            print_error(f" ❌ Gagal fetch invitations"); continue
         try:
             invitations = json.loads(result["output"])
-            inv_id = None
-            for inv in invitations:
-                repo_full_name = inv.get('repository', {}).get('full_name', '').lower()
-                if repo_full_name == target_repo:
-                    inv_id = inv['id']
-                    break
+            inv_id = next((inv['id'] for inv in invitations if inv.get('repository', {}).get('full_name', '').lower() == target_repo), None)
             if inv_id:
                 accept_result = run_gh_api(f"api --method PATCH /user/repository_invitations/{inv_id} --silent", token)
                 if accept_result["success"]:
@@ -244,349 +161,316 @@ def invoke_auto_accept():
                 else:
                     print_error(f" ❌ Gagal accept: {accept_result['error']}")
             else:
-                print_info(" ℹ️  No invitation found")
-        except json.JSONDecodeError as e:
+                print_info(" ℹ️ No invitation found")
+        except (json.JSONDecodeError, KeyError):
             print_error(f" ❌ Gagal parse JSON")
-            write_log(f"JSON Parse Error for @{username}: {str(e)}")
         time.sleep(1)
-    print("\n" + "═" * 47)
-    print_success(f"Proses selesai! Invitation baru diterima: {accepted_count}")
-    write_log(f"Auto accept completed: {accepted_count} new acceptances")
+    print_success(f"\nProses selesai! Invitation baru diterima: {accepted_count}")
 
-def validate_repo_access(repo_path: str, token: str) -> Dict:
-    """Check if repo exists and has required permissions"""
-    result = run_gh_api(f"api repos/{repo_path}", token, max_retries=1)
-    if result["success"]:
-        try:
-            repo_data = json.loads(result["output"])
-            permissions = repo_data.get("permissions", {})
-            has_admin = permissions.get("admin", False)
-            has_push = permissions.get("push", False)
-            return {"success": True, "has_admin": has_admin, "has_push": has_push}
-        except (json.JSONDecodeError, KeyError) as e:
-            return {"success": False, "error": f"Parse error: {str(e)}"}
-    return {"success": False, "error": result["error"]}
-
-def enable_actions(repo_path: str, token: str) -> Dict:
-    """Enable GitHub Actions for repository"""
-    try:
-        command = f"gh api -X PUT repos/{repo_path}/actions/permissions -f enabled=true"
-        result = run_command(command, env={"GH_TOKEN": token}, timeout=15)
-        if result.returncode == 0:
-            return {"success": True, "error": None}
+def invoke_auto_fork():
+    print_header("8. AUTO FORK REPOSITORY")
+    config = load_json_file(CONFIG_FILE)
+    if not config: print_error("Konfigurasi belum diset."); return
+    token_cache = load_json_file(TOKEN_CACHE_FILE)
+    if not token_cache: print_error("Token cache kosong."); return
+    forked_users = read_file_lines(FORKED_REPOS_FILE)
+    main_username = config['main_account_username']
+    source_repo = f"{main_username}/{config['main_repo_name']}"
+    users_to_fork = {u: t for t, u in token_cache.items() if u not in forked_users and u != main_username}
+    if not users_to_fork:
+        print_success("✅ Semua akun sudah melakukan fork."); return
+    print_info(f"Akan melakukan fork untuk {len(users_to_fork)} user baru...")
+    success_count = 0
+    for i, (username, token) in enumerate(users_to_fork.items(), 1):
+        print(f"[{i}/{len(users_to_fork)}] Forking untuk @{username}...", end="", flush=True)
+        result = run_gh_api(f"api -X POST repos/{source_repo}/forks", token)
+        if result["success"] or "fork exists" in result.get("error", ""):
+            print_success(" ✅")
+            if username not in forked_users:
+                append_to_file(FORKED_REPOS_FILE, username)
+            success_count += 1
         else:
-            error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-            return {"success": False, "error": error_msg}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+            print_error(f" ❌ {result.get('error', 'Unknown')}")
+        time.sleep(2)
+    print_success(f"\nProses fork selesai! Berhasil: {success_count}/{len(users_to_fork)}")
 
-def set_actions_secret(repo_path: str, token: str, secret_value: str) -> Dict:
-    """
-    Set repository-scoped Actions secret using GitHub CLI.
-    Target: https://github.com/{owner}/{repo}/settings/secrets/actions/new
-    """
-    try:
-        escaped_value = secret_value.replace("'", "'\\''")
-        command = f"echo '{escaped_value}' | gh secret set DATAGRAM_API_KEYS --repo {repo_path} --body -"
-        result = run_command(command, env={"GH_TOKEN": token}, timeout=30)
-        
-        if result.returncode == 0:
-            return {"success": True, "error": None}
-        else:
-            error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-            return {"success": False, "error": error_msg}
-    except Exception as e:
-        return {"success": False, "error": f"Exception: {str(e)}"}
+def enable_actions(repo_path: str, token: str) -> bool:
+    result = run_gh_api(f"api -X PUT repos/{repo_path}/actions/permissions -f enabled=true -f allowed_actions=all", token)
+    return result["success"]
 
-def set_codespaces_secret(repo_path: str, token: str, secret_value: str) -> Dict:
-    """
-    Set repository-scoped Codespaces secret using GitHub CLI with --app codespaces flag.
-    Target: https://github.com/{owner}/{repo}/settings/secrets/codespaces/new
+def enable_workflow_with_retry(repo_path: str, token: str, workflow_file: str) -> bool:
+    max_retries = 8
+    base_delay = 15
     
-    Requires GitHub CLI v2.40.0+
-    """
-    try:
-        escaped_value = secret_value.replace("'", "'\\''")
-        command = f"echo '{escaped_value}' | gh secret set DATAGRAM_API_KEYS --app codespaces --repo {repo_path} --body -"
-        result = run_command(command, env={"GH_TOKEN": token}, timeout=30)
+    for attempt in range(max_retries):
+        delay = base_delay * (2 ** attempt)
+        print_info(f"Attempt {attempt + 1}/{max_retries}: Waiting {delay}s for workflow sync...")
+        time.sleep(delay)
         
-        if result.returncode == 0:
-            return {"success": True, "error": None}
-        else:
-            error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-            if "404" in error_msg or "Not Found" in error_msg:
-                return {"success": False, "error": "Repository not found or no access"}
-            elif "403" in error_msg or "Forbidden" in error_msg:
-                return {"success": False, "error": "Permission denied (need admin access)"}
+        check_result = run_gh_api(f"api repos/{repo_path}/actions/workflows", token, timeout=60)
+        
+        if not check_result["success"]:
+            print_warning(f"Failed to list workflows: {check_result['error']}")
+            continue
+        
+        try:
+            workflows_data = json.loads(check_result["output"])
+            workflows = workflows_data.get("workflows", [])
+            
+            workflow_id = None
+            for wf in workflows:
+                if wf.get("path") == f".github/workflows/{workflow_file}" or wf.get("name") == workflow_file.replace(".yml", "").replace(".yaml", ""):
+                    workflow_id = wf.get("id")
+                    break
+            
+            if workflow_id:
+                print_success(f"Workflow found with ID: {workflow_id}")
+                enable_result = run_gh_api(f"api -X PUT repos/{repo_path}/actions/workflows/{workflow_id}/enable", token, timeout=30)
+                
+                if enable_result["success"]:
+                    print_success(f"✅ Workflow enabled successfully")
+                    return True
+                else:
+                    error_msg = enable_result.get("error", "")
+                    if "already enabled" in error_msg.lower():
+                        print_success(f"✅ Workflow already enabled")
+                        return True
+                    print_warning(f"Enable failed: {error_msg}")
             else:
-                return {"success": False, "error": error_msg}
-    except Exception as e:
-        return {"success": False, "error": f"Exception: {str(e)}"}
+                print_warning(f"Workflow '{workflow_file}' not found in {len(workflows)} available workflows")
+                if attempt == max_retries - 1 and workflows:
+                    print_info("Available workflows:")
+                    for wf in workflows[:5]:
+                        print(f"  - {wf.get('name')} ({wf.get('path')})")
+        
+        except json.JSONDecodeError as e:
+            print_error(f"JSON decode error: {e}")
+        except Exception as e:
+            print_error(f"Unexpected error: {e}")
+    
+    print_error(f"❌ Failed to enable workflow after {max_retries} attempts")
+    return False
+
+def set_secret(repo_path: str, token: str, name: str, value: str, app: str = "") -> bool:
+    app_flag = f"--app {app}" if app else ""
+    command = f"echo '{value}' | gh secret set {name} --repo \"{repo_path}\" {app_flag} --body -"
+    result = run_command(command, env={"GH_TOKEN": token})
+    return result.returncode == 0
 
 def invoke_auto_set_secrets():
-    print_header("8. AUTO SET SECRETS (ACTIONS + CODESPACES)")
+    print_header("9. AUTO SET SECRETS")
     config = load_json_file(CONFIG_FILE)
-    if not config:
-        print_error("Konfigurasi belum diset. Jalankan menu 1 terlebih dahulu.")
-        return
-    if not API_KEYS_FILE.exists() or API_KEYS_FILE.stat().st_size == 0:
-        print_error("File API keys kosong. Import API keys terlebih dahulu (menu 2).")
-        return
-
+    if not config: print_error("Konfigurasi belum diset."); return
     api_keys = read_file_lines(API_KEYS_FILE)
-    if not api_keys:
-        print_error("Tidak ada API keys yang valid.")
-        return
-
-    print_info(f"📊 Total API Keys: {len(api_keys)}")
-    api_keys_json = json.dumps(api_keys)
-
-    print("\nPilih target untuk set secrets:")
-    print("  1. Main repository saja")
-    print("  2. Main repository + semua collaborator repositories")
+    if not api_keys: print_error("File API keys kosong."); return
+    api_keys_json = json.dumps(api_keys).replace("'", "'\\''")
+    print("Pilih target:\n  1. Main repo saja\n  2. Main repo + semua forked repos")
     choice = input("\nPilihan (1/2): ").strip()
-
-    target_repos = []
-    main_repo = f"{config['main_account_username']}/{config['main_repo_name']}"
-    target_repos.append({'repo': main_repo, 'token': config['main_token'], 'owner': config['main_account_username']})
-
+    targets = [{'repo': f"{config['main_account_username']}/{config['main_repo_name']}", 'token': config['main_token']}]
     if choice == '2':
-        token_cache = load_json_file(TOKEN_CACHE_FILE)
-        accepted_users = read_file_lines(ACCEPTED_USERS_FILE)
-        if not token_cache:
-            print_warning("Token cache kosong. Hanya akan set secret di main repo.")
-        else:
-            for token, username in token_cache.items():
-                if username in accepted_users and username != config['main_account_username']:
-                    collab_repo = f"{username}/{config['main_repo_name']}"
-                    target_repos.append({'repo': collab_repo, 'token': token, 'owner': username})
-
-    print_info(f"\n🎯 Target: {len(target_repos)} repository/repositories")
-    print_warning("\n⚠️  Proses ini akan:")
-    print("  • Validate repository access")
-    print("  • Enable GitHub Actions (jika belum aktif)")
-    print("  • Set secret 'DATAGRAM_API_KEYS' ke GitHub Actions")
-    print("  • Set secret 'DATAGRAM_API_KEYS' ke Codespaces")
-    print("  • Format: JSON array untuk multi-node support")
-
-    if input("\nLanjutkan? (y/n): ").lower() != 'y':
-        print_warning("Operasi dibatalkan.")
-        return
-
-    # Pre-validation: filter repos dengan akses valid (parallel)
-    print_info("\n📋 Validating repository access (parallel)...")
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
-    validated_repos = []
-    failed_repos = []
-    
-    def check_repo(target):
-        repo_path = target['repo']
-        token = target['token']
-        access = validate_repo_access(repo_path, token)
-        return (target, access)
-    
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(check_repo, target): target for target in target_repos}
-        
-        for future in as_completed(futures):
-            target, access = future.result()
-            repo_path = target['repo']
-            
-            print(f"  {repo_path}...", end="", flush=True)
-            if access["success"]:
-                if access["has_admin"] or access["has_push"]:
-                    print_success(" ✅")
-                    validated_repos.append(target)
-                else:
-                    print_warning(" ⚠️  No push access")
-                    failed_repos.append(repo_path)
-            else:
-                error_short = access['error'][:30] if access['error'] else "Unknown"
-                print_error(f" ❌ {error_short}")
-                failed_repos.append(repo_path)
-
-    if not validated_repos:
-        print_error("\n❌ Tidak ada repository yang dapat diakses.")
-        return
-
-    print_info(f"\n✅ {len(validated_repos)}/{len(target_repos)} repositories valid")
-    
+        token_cache, forked_users = load_json_file(TOKEN_CACHE_FILE), read_file_lines(FORKED_REPOS_FILE)
+        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t}
+                        for t, u in token_cache.items() if u in forked_users])
+    if input(f"\n🎯 Target: {len(targets)} repos. Lanjutkan? (y/n): ").lower() != 'y':
+        print_warning("Operasi dibatalkan."); return
+    secrets_set_log = read_file_lines(SECRETS_SET_FILE)
     success_count = 0
-    failed_repos = []
-
-    for i, target in enumerate(validated_repos, 1):
-        repo_path = target['repo']
-        token = target['token']
-        owner = target['owner']
-        print(f"\n[{i}/{len(validated_repos)}] Processing: {repo_path}")
-        
-        # Enable Actions
-        print("  ├─ Enabling Actions...", end="", flush=True)
-        enable_result = enable_actions(repo_path, token)
-        if enable_result["success"]:
-            print_success(" ✅")
+    for i, target in enumerate(targets, 1):
+        repo_path, token = target['repo'], target['token']
+        print(f"\n[{i}/{len(targets)}] Processing: {repo_path}")
+        if repo_path in secrets_set_log:
+            print_info("  ℹ️ Already set (skipped)"); continue
+        print_info("  🔓 Enabling GitHub Actions...")
+        if not enable_actions(repo_path, token):
+            print_error("  ❌ Failed to enable Actions"); continue
+        time.sleep(3)
+        print_info(f"  🔑 Setting secret DATAGRAM_API_KEYS...")
+        if set_secret(repo_path, token, "DATAGRAM_API_KEYS", api_keys_json):
+            print_success("  ✅ Secret set successfully")
+            append_to_file(SECRETS_SET_FILE, repo_path)
+            success_count += 1
         else:
-            print_warning(f" ⚠️  {enable_result['error'][:40]}...")
-        
-        # Set Actions Secret
-        print("  ├─ Actions Secret...", end="", flush=True)
-        actions_result = set_actions_secret(repo_path, token, api_keys_json)
-        if actions_result["success"]:
-            print_success(" ✅")
-        else:
-            print_error(f" ❌ {actions_result['error'][:40]}...")
-            failed_repos.append({'repo': repo_path, 'type': 'actions', 'error': actions_result['error']})
-        
-        # Set Codespaces Secret
-        print("  └─ Codespaces Secret...", end="", flush=True)
-        codespaces_result = set_codespaces_secret(repo_path, token, api_keys_json)
-        if codespaces_result["success"]:
-            print_success(" ✅")
-            if actions_result["success"]:
-                success_count += 1
-        else:
-            print_error(f" ❌ {codespaces_result['error'][:40]}...")
-            failed_repos.append({'repo': repo_path, 'type': 'codespaces', 'error': codespaces_result['error']})
-        
-        time.sleep(1)
-
-    print("\n" + "═" * 47)
-    print_success(f"✅ Berhasil set secrets: {success_count}/{len(validated_repos)} repos")
-    if failed_repos:
-        print_warning(f"\n⚠️  {len(failed_repos)} operasi gagal:")
-        for fail in failed_repos[:5]:
-            print(f"  • {fail['repo']} ({fail['type']}): {fail['error'][:50]}...")
-    write_log(f"Auto set secrets completed: {success_count} successful, {len(failed_repos)} failed")
-    if success_count > 0:
-        for target in validated_repos:
-            append_to_file(SECRETS_SET_FILE, target['owner'])
+            print_error("  ❌ Failed to set secret")
+        time.sleep(2)
+    print_success(f"\n✅ Selesai! Berhasil: {success_count}/{len(targets)}")
 
 def deploy_to_github():
-    print_header("9. DEPLOY TO GITHUB")
+    print_header("10. DEPLOY TO GITHUB")
     config = load_json_file(CONFIG_FILE)
-    if not config:
-        print_error("Konfigurasi belum diset. Jalankan menu 1 terlebih dahulu.")
-        return
-    repo_path = f"{config['main_account_username']}/{config['main_repo_name']}"
-    print_info(f"Target repository: {repo_path}")
-    print_info("Mengecek repository...")
-    check_result = run_gh_api(f"api repos/{repo_path}", config['main_token'], max_retries=1)
-    if not check_result["success"]:
-        print_warning("⚠️  Repository tidak ditemukan.")
-        if input("Buat repository baru? (y/n): ").lower() == 'y':
-            create_result = run_gh_api(f"repo create {repo_path} --private --confirm", config['main_token'])
-            if not create_result["success"]:
-                print_error(f"Gagal membuat repository: {create_result['error']}")
-                return
-            print_success("✅ Repository berhasil dibuat!")
-            time.sleep(2)
-        else:
-            print_warning("Operasi dibatalkan.")
-            return
-    else:
-        print_success("✅ Repository ditemukan!")
-    print_info("\n📦 Melakukan git operations...")
-    if not Path(".git").exists():
-        print_info("Initializing git...")
-        run_command("git init")
-        run_command(f"git remote add origin https://github.com/{repo_path}.git")
-    print_info("Adding files...")
-    run_command("git add .")
-    print_info("Committing...")
-    commit_result = run_command('git commit -m "🚀 Deploy Datagram Orchestrator v3.2"')
-    if commit_result.returncode != 0 and "nothing to commit" not in commit_result.stdout:
-        print_warning("⚠️  Commit warning (mungkin tidak ada perubahan)")
-    print_info("Pushing to GitHub...")
-    push_result = run_command(f"git push -u origin main --force", env={"GH_TOKEN": config['main_token']}, timeout=60)
-    if push_result.returncode == 0:
-        print_success("\n✅ Deployment berhasil!")
-        print_info(f"🔗 Repository: https://github.com/{repo_path}")
-        print_info(f"🔗 Actions: https://github.com/{repo_path}/actions")
-        write_log(f"Deployment successful to {repo_path}")
-    else:
-        print_error(f"\n❌ Gagal melakukan push:")
-        print_error(push_result.stderr)
-        write_log(f"Deployment failed: {push_result.stderr}")
+    if not config: print_error("Konfigurasi belum diset."); return
+    token_cache, forked_users = load_json_file(TOKEN_CACHE_FILE), read_file_lines(FORKED_REPOS_FILE)
+    if not token_cache: print_error("Token cache kosong."); return
+    workflow_file = "datagram-runner.yml"
+    workflow_source = Path(__file__).parent.parent / ".github" / "workflows" / workflow_file
+    if not workflow_source.exists():
+        print_error(f"File workflow tidak ditemukan: {workflow_source}"); return
+    print("Pilih target deployment:\n  1. Main repo saja\n  2. Semua forked repos\n  3. Main + semua forks")
+    choice = input("\nPilihan (1/2/3): ").strip()
+    targets = []
+    if choice in ['1', '3']:
+        targets.append({'repo': f"{config['main_account_username']}/{config['main_repo_name']}", 'token': config['main_token'], 'username': config['main_account_username']})
+    if choice in ['2', '3']:
+        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t, 'username': u}
+                        for t, u in token_cache.items() if u in forked_users])
+    if not targets:
+        print_warning("Tidak ada target yang dipilih."); return
+    if input(f"\n🎯 Akan deploy ke {len(targets)} repo. Lanjutkan? (y/n): ").lower() != 'y':
+        print_warning("Operasi dibatalkan."); return
+    workflow_content = workflow_source.read_text(encoding='utf-8')
+    success_count = 0
+    for i, target in enumerate(targets, 1):
+        repo_path, token, username = target['repo'], target['token'], target['username']
+        print(f"\n{'='*47}")
+        print(f"[{i}/{len(targets)}] Deploying to: {repo_path}")
+        print(f"{'='*47}")
+        temp_dir = Path(f"/tmp/deploy_{username}_{int(time.time())}")
+        try:
+            print_info("📥 Cloning repository...")
+            clone_result = run_command(f"git clone https://{token}@github.com/{repo_path}.git {temp_dir}", timeout=120)
+            if clone_result.returncode != 0:
+                print_error(f"❌ Clone failed: {clone_result.stderr}"); continue
+            workflow_dir = temp_dir / ".github" / "workflows"
+            workflow_dir.mkdir(parents=True, exist_ok=True)
+            workflow_path = workflow_dir / workflow_file
+            workflow_path.write_text(workflow_content, encoding='utf-8')
+            print_success(f"✅ Workflow file created: {workflow_file}")
+            print_info("📤 Committing and pushing...")
+            commit_commands = [
+                f"cd {temp_dir} && git config user.name 'Datagram Bot'",
+                f"cd {temp_dir} && git config user.email 'bot@datagram.local'",
+                f"cd {temp_dir} && git add .github/workflows/{workflow_file}",
+                f"cd {temp_dir} && git commit -m 'Deploy Datagram workflow'",
+                f"cd {temp_dir} && git push origin main"
+            ]
+            for cmd in commit_commands:
+                result = run_command(cmd, timeout=60)
+                if result.returncode != 0 and "nothing to commit" not in result.stdout.lower():
+                    print_error(f"❌ Command failed: {cmd}\n{result.stderr}"); break
+            else:
+                print_success("✅ Workflow pushed to repository")
+                print_info("⏳ Waiting for GitHub to sync workflow (10s)...")
+                time.sleep(10)
+                print_info("🔧 Enabling GitHub Actions...")
+                if enable_actions(repo_path, token):
+                    print_success("✅ Actions enabled")
+                    print_info(f"🔄 Enabling workflow: {workflow_file}")
+                    if enable_workflow_with_retry(repo_path, token, workflow_file):
+                        print_success("✅ Workflow enabled successfully!")
+                        success_count += 1
+                    else:
+                        print_warning("⚠️ Workflow file deployed but auto-enable failed. Enable manually at:")
+                        print(f"   https://github.com/{repo_path}/actions")
+                else:
+                    print_error("❌ Failed to enable Actions")
+        except Exception as e:
+            print_error(f"❌ Deployment error: {e}")
+        finally:
+            if temp_dir.exists():
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        time.sleep(3)
+    print(f"\n{'='*47}")
+    print_success(f"✅ Deployment selesai! Berhasil: {success_count}/{len(targets)}")
+    print(f"{'='*47}")
 
 def invoke_workflow_trigger():
-    print_header("10. TRIGGER WORKFLOW")
+    print_header("11. TRIGGER WORKFLOW")
     config = load_json_file(CONFIG_FILE)
-    if not config:
-        print_error("Konfigurasi belum diset.")
-        return
-    repo_path = f"{config['main_account_username']}/{config['main_repo_name']}"
-    print_info(f"Target: {repo_path}")
-    print_info("Memicu workflow 'datagram-runner.yml'...")
-    result = run_gh_api(f"workflow run datagram-runner.yml -R {repo_path}", config['main_token'])
-    if result["success"]:
-        print_success("\n✅ Workflow berhasil dipicu!")
-        print_info(f"🔗 Monitor di: https://github.com/{repo_path}/actions")
-        write_log(f"Workflow triggered for {repo_path}")
-    else:
-        print_error(f"\n❌ Gagal memicu workflow:")
-        print_error(result["error"])
+    if not config: print_error("Konfigurasi belum diset."); return
+    token_cache, forked_users = load_json_file(TOKEN_CACHE_FILE), read_file_lines(FORKED_REPOS_FILE)
+    workflow_file = "datagram-runner.yml"
+    print("Pilih target:\n  1. Main repo saja\n  2. Semua forked repos\n  3. Main + semua forks")
+    choice = input("\nPilihan (1/2/3): ").strip()
+    targets = []
+    if choice in ['1', '3']:
+        targets.append({'repo': f"{config['main_account_username']}/{config['main_repo_name']}", 'token': config['main_token']})
+    if choice in ['2', '3']:
+        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t}
+                        for t, u in token_cache.items() if u in forked_users])
+    if not targets:
+        print_warning("Tidak ada target yang dipilih."); return
+    print_info(f"\n🎯 Akan trigger workflow di {len(targets)} repo...")
+    success_count = 0
+    for i, target in enumerate(targets, 1):
+        repo_path, token = target['repo'], target['token']
+        print(f"[{i}/{len(targets)}] Triggering: {repo_path}...", end="", flush=True)
+        result = run_gh_api(f"api -X POST repos/{repo_path}/actions/workflows/{workflow_file}/dispatches -f ref=main", token)
+        if result["success"]:
+            print_success(" ✅")
+            success_count += 1
+        else:
+            print_error(f" ❌ {result['error']}")
+        time.sleep(2)
+    print_success(f"\n✅ Selesai! Berhasil trigger: {success_count}/{len(targets)}")
 
 def show_workflow_status():
-    print_header("11. SHOW WORKFLOW STATUS")
+    print_header("12. SHOW WORKFLOW STATUS")
     config = load_json_file(CONFIG_FILE)
-    if not config:
-        print_error("Konfigurasi belum diset.")
-        return
-    repo_path = f"{config['main_account_username']}/{config['main_repo_name']}"
-    print_info(f"Repository: {repo_path}")
-    print_info("Fetching workflow runs...\n")
-    result = run_gh_api(f"run list -R {repo_path} --limit 10", config['main_token'])
-    if result["success"]:
-        print(result["output"])
-        print("\n" + "═" * 47)
-        print_info(f"🔗 Detail: https://github.com/{repo_path}/actions")
-    else:
-        print_error(f"Gagal mendapatkan status: {result['error']}")
+    if not config: print_error("Konfigurasi belum diset."); return
+    token_cache, forked_users = load_json_file(TOKEN_CACHE_FILE), read_file_lines(FORKED_REPOS_FILE)
+    print("Pilih target:\n  1. Main repo saja\n  2. Semua forked repos\n  3. Main + semua forks")
+    choice = input("\nPilihan (1/2/3): ").strip()
+    targets = []
+    if choice in ['1', '3']:
+        targets.append({'repo': f"{config['main_account_username']}/{config['main_repo_name']}", 'token': config['main_token']})
+    if choice in ['2', '3']:
+        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t}
+                        for t, u in token_cache.items() if u in forked_users])
+    if not targets:
+        print_warning("Tidak ada target yang dipilih."); return
+    print(f"\n{'='*47}")
+    print_header("WORKFLOW STATUS REPORT")
+    for i, target in enumerate(targets, 1):
+        repo_path, token = target['repo'], target['token']
+        print(f"\n[{i}/{len(targets)}] {repo_path}")
+        result = run_gh_api(f"api repos/{repo_path}/actions/runs?per_page=5", token)
+        if result["success"]:
+            try:
+                runs = json.loads(result["output"])
+                total_runs = runs.get("total_count", 0)
+                print(f"  📊 Total runs: {total_runs}")
+                if runs.get("workflow_runs"):
+                    print("  📋 Latest runs:")
+                    for run in runs["workflow_runs"][:3]:
+                        status = run.get("status", "unknown")
+                        conclusion = run.get("conclusion", "N/A")
+                        created = run.get("created_at", "")[:10]
+                        print(f"    • {status.upper()} ({conclusion}) - {created}")
+                else:
+                    print_info("  ℹ️ No runs found")
+            except json.JSONDecodeError:
+                print_error("  ❌ Failed to parse response")
+        else:
+            print_error(f"  ❌ {result['error']}")
+    print(f"\n{'='*47}")
 
 def view_logs():
-    print_header("12. VIEW LOGS")
-    from .helpers import LOG_FILE
-    if not LOG_FILE.exists():
-        print_warning("File log belum ada.")
-        return
-    try:
-        log_content = LOG_FILE.read_text(encoding="utf-8")
-        if not log_content.strip():
-            print_warning("File log kosong.")
-            return
-        lines = log_content.splitlines()
-        print_info(f"Total log entries: {len(lines)}")
-        print_info(f"Log file: {LOG_FILE}\n")
-        print("═" * 47)
-        for line in lines[-50:]:
-            print(line)
-        print("═" * 47)
-        if len(lines) > 50:
-            print_info(f"\nShowing last 50 of {len(lines)} lines")
-    except Exception as e:
-        print_error(f"Error membaca log: {str(e)}")
+    print_header("13. VIEW LOGS")
+    from .helpers import LOGS_DIR
+    log_file = LOGS_DIR / "setup.log"
+    if not log_file.exists():
+        print_warning("File log tidak ditemukan."); return
+    print_info(f"Lokasi: {log_file}\n")
+    lines = log_file.read_text(encoding='utf-8').strip().split('\n')
+    print(f"📄 Showing last 30 lines:\n{'-'*47}")
+    for line in lines[-30:]:
+        print(line)
+    print(f"{'-'*47}")
 
 def clean_cache():
-    print_header("13. CLEAN CACHE")
-    from .helpers import TOKEN_CACHE_FILE, INVITED_USERS_FILE, ACCEPTED_USERS_FILE, SECRETS_SET_FILE
-    cache_files = [TOKEN_CACHE_FILE, INVITED_USERS_FILE, ACCEPTED_USERS_FILE, SECRETS_SET_FILE]
-    print_warning("⚠️  Ini akan menghapus semua file cache:")
+    print_header("14. CLEAN CACHE")
+    from .helpers import CACHE_DIR
+    if not CACHE_DIR.exists():
+        print_warning("Cache directory tidak ditemukan."); return
+    cache_files = list(CACHE_DIR.glob("*"))
+    if not cache_files:
+        print_success("✅ Cache sudah kosong."); return
+    print_warning(f"⚠️ Akan menghapus {len(cache_files)} file cache:")
     for f in cache_files:
-        status = "✓ exists" if f.exists() else "✗ not found"
-        print(f"  • {f.name} ({status})")
-    if input("\nLanjutkan? (y/n): ").lower() != 'y':
+        print(f"  - {f.name}")
+    if input("\nLanjutkan? (y/n): ").lower() == 'y':
+        for f in cache_files:
+            f.unlink()
+        print_success("✅ Cache berhasil dibersihkan.")
+    else:
         print_warning("Operasi dibatalkan.")
-        return
-    deleted_count = 0
-    for cache_file in cache_files:
-        if cache_file.exists():
-            try:
-                cache_file.unlink()
-                deleted_count += 1
-                print_success(f"✅ Deleted: {cache_file.name}")
-            except Exception as e:
-                print_error(f"❌ Failed to delete {cache_file.name}: {str(e)}")
-    print("\n" + "═" * 47)
-    print_success(f"Cache berhasil dibersihkan! ({deleted_count} file dihapus)")
-    write_log("Cache cleaned")
