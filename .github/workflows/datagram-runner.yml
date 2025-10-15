@@ -13,11 +13,6 @@ on:
         required: false
         type: boolean
         default: true
-      bypass_billing_check:
-        description: 'Bypass billing quota check'
-        required: false
-        type: boolean
-        default: false
   schedule:
     - cron: '0 */5 * * *'
   push:
@@ -29,198 +24,20 @@ env:
   NODE_VERSION: 'latest'
   RESTART_DELAY: 10
   MAX_RETRIES: 100
-  BILLING_THRESHOLD: 1800
 
 concurrency:
   group: datagram-${{ github.ref }}-${{ github.run_number }}
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  actions: write
-
 jobs:
-  check-billing:
-    name: 🔒 Billing Quota Check
-    runs-on: ubuntu-latest
-    outputs:
-      quota_status: ${{ steps.check.outputs.quota_status }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify Actions Usage
-        id: check
-        run: |
-          set -euo pipefail
-          echo "════════════════════════════════════════════════"
-          echo "🔍 CHECKING GITHUB ACTIONS BILLING USAGE"
-          echo "════════════════════════════════════════════════"
-          
-          if [ "${{ inputs.bypass_billing_check }}" == "true" ]; then
-            echo "⚠️  BYPASS MODE ENABLED"
-            echo "🔓 Skipping billing quota check as requested"
-            echo "════════════════════════════════════════════════"
-            echo "quota_status=bypassed" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          
-          OWNER="${{ github.repository_owner }}"
-          REPO="${{ github.repository }}"
-          WORKFLOW_FILE="datagram-runner.yml"
-          
-          echo "📊 Fetching billing data for repository: $REPO"
-          
-          BILLING_DATA=$(gh api "/repos/$REPO/actions/billing/usage" 2>&1) || {
-            echo "⚠️  Unable to fetch repository billing data"
-            echo "💡 This may be due to:"
-            echo "   • Repository is not part of an organization with billing API access"
-            echo "   • Token lacks required permissions"
-            echo ""
-            echo "🔄 Attempting alternative: Check workflow runs history..."
-            
-            RECENT_RUNS=$(gh api "/repos/$REPO/actions/runs?per_page=100" --jq '[.workflow_runs[] | select(.conclusion != null)] | length')
-            TOTAL_DURATION=$(gh api "/repos/$REPO/actions/runs?per_page=100" --jq '[.workflow_runs[] | select(.conclusion != null) | ((.updated_at | fromdateiso8601) - (.created_at | fromdateiso8601))] | add // 0')
-            ESTIMATED_MINUTES=$((TOTAL_DURATION / 60))
-            
-            echo "✅ Workflow history retrieved"
-            echo "───────────────────────────────────────────────"
-            echo "📊 Recent completed runs: $RECENT_RUNS"
-            echo "⏱️  Estimated total duration: $ESTIMATED_MINUTES minutes"
-            echo "🎯 Safety threshold: ${{ env.BILLING_THRESHOLD }} minutes"
-            echo "───────────────────────────────────────────────"
-            
-            if [ "$ESTIMATED_MINUTES" -ge "${{ env.BILLING_THRESHOLD }}" ]; then
-              echo ""
-              echo "╔═══════════════════════════════════════════════╗"
-              echo "║           ⚠️  QUOTA LIMIT REACHED ⚠️          ║"
-              echo "╚═══════════════════════════════════════════════╝"
-              echo ""
-              echo "❌ CRITICAL: Estimated usage ($ESTIMATED_MINUTES min) exceeds threshold"
-              echo "🛑 Initiating workflow shutdown procedure..."
-              echo ""
-              
-              echo "📝 Modifying workflow file to disable scheduled runs..."
-              
-              if [ -f ".github/workflows/$WORKFLOW_FILE" ]; then
-                sed -i '/schedule:/,/cron:/s/^/#/' ".github/workflows/$WORKFLOW_FILE"
-                
-                if git diff --quiet ".github/workflows/$WORKFLOW_FILE"; then
-                  echo "⚠️  No changes detected in workflow file"
-                else
-                  git config user.name "github-actions[bot]"
-                  git config user.email "github-actions[bot]@users.noreply.github.com"
-                  git add ".github/workflows/$WORKFLOW_FILE"
-                  git commit -m "🔒 Auto-disable: Billing quota exceeded ($ESTIMATED_MINUTES/${{ env.BILLING_THRESHOLD }} min)"
-                  git push || {
-                    echo "⚠️  Failed to push changes"
-                  }
-                  
-                  echo ""
-                  echo "════════════════════════════════════════════════"
-                  echo "✅ Workflow schedule disabled via file modification"
-                  echo "💡 To re-enable:"
-                  echo "   1. Edit .github/workflows/$WORKFLOW_FILE"
-                  echo "   2. Uncomment the 'schedule' section"
-                  echo "   3. Commit and push changes"
-                  echo "════════════════════════════════════════════════"
-                fi
-              fi
-              
-              echo ""
-              echo "quota_status=exceeded" >> "$GITHUB_OUTPUT"
-              exit 1
-            else
-              REMAINING=$((BILLING_THRESHOLD - ESTIMATED_MINUTES))
-              echo ""
-              echo "✅ QUOTA CHECK PASSED (Estimated)"
-              echo "📈 Estimated remaining buffer: $REMAINING minutes"
-              echo "🚀 Proceeding with workflow execution..."
-              echo "════════════════════════════════════════════════"
-              echo "quota_status=safe" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          }
-          
-          TOTAL_MINUTES=$(echo "$BILLING_DATA" | jq '.total_minutes_used // 0')
-          
-          echo "✅ Billing data retrieved successfully"
-          echo "───────────────────────────────────────────────"
-          echo "⏱️  Total Actions Minutes Used: $TOTAL_MINUTES"
-          echo "🎯 Safety Threshold: ${{ env.BILLING_THRESHOLD }}"
-          echo "───────────────────────────────────────────────"
-          
-          if [ "$TOTAL_MINUTES" -ge "${{ env.BILLING_THRESHOLD }}" ]; then
-            echo ""
-            echo "╔═══════════════════════════════════════════════╗"
-            echo "║           ⚠️  QUOTA LIMIT REACHED ⚠️          ║"
-            echo "╚═══════════════════════════════════════════════╝"
-            echo ""
-            echo "❌ CRITICAL: Actions usage ($TOTAL_MINUTES min) exceeds threshold (${{ env.BILLING_THRESHOLD }} min)"
-            echo "🛑 Initiating workflow shutdown procedure..."
-            echo ""
-            
-            echo "📝 Modifying workflow file to disable scheduled runs..."
-            
-            if [ -f ".github/workflows/$WORKFLOW_FILE" ]; then
-              sed -i '/schedule:/,/cron:/s/^/#/' ".github/workflows/$WORKFLOW_FILE"
-              
-              if git diff --quiet ".github/workflows/$WORKFLOW_FILE"; then
-                echo "⚠️  No changes detected in workflow file"
-              else
-                git config user.name "github-actions[bot]"
-                git config user.email "github-actions[bot]@users.noreply.github.com"
-                git add ".github/workflows/$WORKFLOW_FILE"
-                git commit -m "🔒 Auto-disable: Billing quota exceeded ($TOTAL_MINUTES/${{ env.BILLING_THRESHOLD }} min)"
-                git push || {
-                  echo "⚠️  Failed to push changes"
-                }
-                
-                echo ""
-                echo "════════════════════════════════════════════════"
-                echo "✅ Workflow schedule disabled via file modification"
-                echo "💡 To re-enable:"
-                echo "   1. Edit .github/workflows/$WORKFLOW_FILE"
-                echo "   2. Uncomment the 'schedule' section"
-                echo "   3. Commit and push changes"
-                echo "════════════════════════════════════════════════"
-              fi
-            fi
-            
-            echo ""
-            echo "quota_status=exceeded" >> "$GITHUB_OUTPUT"
-            exit 1
-          else
-            REMAINING=$((BILLING_THRESHOLD - TOTAL_MINUTES))
-            echo ""
-            echo "✅ QUOTA CHECK PASSED"
-            echo "📈 Remaining buffer: $REMAINING minutes"
-            echo "🚀 Proceeding with workflow execution..."
-            echo "════════════════════════════════════════════════"
-            echo "quota_status=safe" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BILLING_THRESHOLD: ${{ env.BILLING_THRESHOLD }}
-
   setup-matrix:
     name: 🔧 Setup Multi-Account Matrix
-    needs: check-billing
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.parse.outputs.matrix }}
       total: ${{ steps.parse.outputs.total }}
-      timestamp: ${{ steps.set-timestamp.outputs.timestamp }}
+      timestamp: ${{ steps.parse.outputs.timestamp }}
     steps:
-      - name: Set Timestamp
-        id: set-timestamp
-        run: |
-          TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
-          echo "✅ Timestamp set: $TIMESTAMP"
-
       - name: Parse API Keys
         id: parse
         run: |
@@ -290,10 +107,13 @@ jobs:
             exit 1
           fi
           
+          TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
           echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
           echo "$MATRIX" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
           echo "total=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
           
           echo ""
           echo "════════════════════════════════════════════════"
@@ -314,7 +134,7 @@ jobs:
           echo "$MATRIX" | jq '.'
           echo ""
           echo "🔢 Total Nodes: $TOTAL"
-          echo "⏰ Timestamp: ${{ steps.set-timestamp.outputs.timestamp }}"
+          echo "⏰ Timestamp: ${{ steps.parse.outputs.timestamp }}"
           echo ""
           
           echo "🔍 Validating node configurations..."
@@ -344,7 +164,7 @@ jobs:
 
   run-nodes:
     name: 🚀 Node #${{ matrix.index }}
-    needs: [check-billing, setup-matrix]
+    needs: setup-matrix
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
@@ -487,7 +307,7 @@ jobs:
 
   monitor:
     name: 📊 Health Monitor
-    needs: [check-billing, setup-matrix, run-nodes]
+    needs: [setup-matrix, run-nodes]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -505,11 +325,10 @@ jobs:
           echo ""
           echo "📈 Job Results:"
           echo "───────────────────────────────────────────────"
-          echo "🔒 Billing Check: ${{ needs.check-billing.result }}"
-          echo "✅ Success      : ${{ needs.run-nodes.result == 'success' }}"
-          echo "❌ Failure      : ${{ needs.run-nodes.result == 'failure' }}"
-          echo "⚠️ Cancelled    : ${{ needs.run-nodes.result == 'cancelled' }}"
-          echo "⏭️ Skipped      : ${{ needs.run-nodes.result == 'skipped' }}"
+          echo "✅ Success    : ${{ needs.run-nodes.result == 'success' }}"
+          echo "❌ Failure    : ${{ needs.run-nodes.result == 'failure' }}"
+          echo "⚠️ Cancelled  : ${{ needs.run-nodes.result == 'cancelled' }}"
+          echo "⏭️ Skipped    : ${{ needs.run-nodes.result == 'skipped' }}"
           echo ""
           echo "═══════════════════════════════════════════════"
           
