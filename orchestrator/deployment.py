@@ -21,6 +21,7 @@ from .helpers import (
     FORKED_REPOS_FILE,
     WORKFLOWS_ENABLED_FILE
 )
+from .collaboration import sync_fork_with_upstream
 from .utils import check_actions_usage
 
 
@@ -29,7 +30,7 @@ def enable_actions_on_repo(repo_path: str, token: str) -> bool:
     print_info("🔧 Enabling GitHub Actions on repository...")
     
     result = run_gh_api(
-        f"api -X PUT repos/{repo_path}/actions/permissions -f enabled=true -f allowed_actions=all",
+        f"api -X PUT repos/{repo_path}/actions/permissions -F enabled=true -F allowed_actions=all",
         token,
         timeout=30
     )
@@ -113,10 +114,20 @@ def deploy_to_github():
     workflow_content = workflow_source.read_text(encoding='utf-8')
     workflows_enabled = read_file_lines(WORKFLOWS_ENABLED_FILE)
     success_count = 0
+    source_repo = f"{config['main_account_username']}/{config['main_repo_name']}"
 
     for i, target in enumerate(targets, 1):
         repo_path, token, username = target['repo'], target['token'], target['username']
         print(f"\n{'='*47}\n[{i}/{len(targets)}] Deploying to: {repo_path}\n{'='*47}")
+
+        # Sync fork sebelum deployment (hanya untuk fork, bukan main repo)
+        if username != config['main_account_username']:
+            print_info("🔄 Syncing fork with upstream...")
+            if sync_fork_with_upstream(repo_path, token):
+                print_success("✅ Fork synced")
+            else:
+                print_warning("⚠️ Fork sync failed, continuing anyway...")
+            time.sleep(2)
 
         enable_actions_on_repo(repo_path, token)
 
