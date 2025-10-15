@@ -13,6 +13,11 @@ on:
         required: false
         type: boolean
         default: true
+      bypass_billing_check:
+        description: 'Bypass billing quota check'
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: '0 */5 * * *'
   push:
@@ -35,14 +40,31 @@ jobs:
     name: 🔒 Billing Quota Check
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+      actions: write
+    outputs:
+      quota_status: ${{ steps.check.outputs.quota_status }}
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Verify Actions Usage
+        id: check
         run: |
           set -euo pipefail
           echo "════════════════════════════════════════════════"
           echo "🔍 CHECKING GITHUB ACTIONS BILLING USAGE"
           echo "════════════════════════════════════════════════"
+          
+          if [ "${{ inputs.bypass_billing_check }}" == "true" ]; then
+            echo "⚠️  BYPASS MODE ENABLED"
+            echo "🔓 Skipping billing quota check as requested"
+            echo "════════════════════════════════════════════════"
+            echo "quota_status=bypassed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           
           OWNER="${{ github.repository_owner }}"
           REPO="${{ github.repository }}"
@@ -76,28 +98,38 @@ jobs:
               echo "╚═══════════════════════════════════════════════╝"
               echo ""
               echo "❌ CRITICAL: Estimated usage ($ESTIMATED_MINUTES min) exceeds threshold"
-              echo "🛑 Initiating automatic workflow shutdown..."
+              echo "🛑 Initiating workflow shutdown procedure..."
               echo ""
               
-              echo "📡 Fetching workflow ID..."
-              WORKFLOW_ID=$(gh api "/repos/$REPO/actions/workflows" --jq ".workflows[] | select(.path | endswith(\"$WORKFLOW_FILE\")) | .id")
+              echo "📝 Modifying workflow file to disable scheduled runs..."
               
-              if [ -n "$WORKFLOW_ID" ]; then
-                echo "🔧 Workflow ID: $WORKFLOW_ID"
-                echo "🔒 Disabling workflow..."
+              if [ -f ".github/workflows/$WORKFLOW_FILE" ]; then
+                sed -i '/schedule:/,/cron:/s/^/#/' ".github/workflows/$WORKFLOW_FILE"
                 
-                gh api --method PUT "/repos/$REPO/actions/workflows/$WORKFLOW_ID/disable" 2>&1 || {
-                  echo "⚠️  Failed to disable workflow via API"
-                }
-                
-                echo ""
-                echo "════════════════════════════════════════════════"
-                echo "✅ Workflow disabled"
-                echo "💡 Re-enable at: https://github.com/$REPO/actions/workflows/$WORKFLOW_FILE"
-                echo "════════════════════════════════════════════════"
+                if git diff --quiet ".github/workflows/$WORKFLOW_FILE"; then
+                  echo "⚠️  No changes detected in workflow file"
+                else
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add ".github/workflows/$WORKFLOW_FILE"
+                  git commit -m "🔒 Auto-disable: Billing quota exceeded ($ESTIMATED_MINUTES/${{ env.BILLING_THRESHOLD }} min)"
+                  git push || {
+                    echo "⚠️  Failed to push changes"
+                  }
+                  
+                  echo ""
+                  echo "════════════════════════════════════════════════"
+                  echo "✅ Workflow schedule disabled via file modification"
+                  echo "💡 To re-enable:"
+                  echo "   1. Edit .github/workflows/$WORKFLOW_FILE"
+                  echo "   2. Uncomment the 'schedule' section"
+                  echo "   3. Commit and push changes"
+                  echo "════════════════════════════════════════════════"
+                fi
               fi
               
               echo ""
+              echo "quota_status=exceeded" >> "$GITHUB_OUTPUT"
               exit 1
             else
               REMAINING=$((BILLING_THRESHOLD - ESTIMATED_MINUTES))
@@ -106,6 +138,7 @@ jobs:
               echo "📈 Estimated remaining buffer: $REMAINING minutes"
               echo "🚀 Proceeding with workflow execution..."
               echo "════════════════════════════════════════════════"
+              echo "quota_status=safe" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           }
@@ -125,32 +158,38 @@ jobs:
             echo "╚═══════════════════════════════════════════════╝"
             echo ""
             echo "❌ CRITICAL: Actions usage ($TOTAL_MINUTES min) exceeds threshold (${{ env.BILLING_THRESHOLD }} min)"
-            echo "🛑 Initiating automatic workflow shutdown..."
+            echo "🛑 Initiating workflow shutdown procedure..."
             echo ""
             
-            echo "📡 Fetching workflow ID..."
-            WORKFLOW_ID=$(gh api "/repos/$REPO/actions/workflows" --jq ".workflows[] | select(.path | endswith(\"$WORKFLOW_FILE\")) | .id")
+            echo "📝 Modifying workflow file to disable scheduled runs..."
             
-            if [ -z "$WORKFLOW_ID" ]; then
-              echo "❌ Failed to retrieve workflow ID"
-              exit 1
+            if [ -f ".github/workflows/$WORKFLOW_FILE" ]; then
+              sed -i '/schedule:/,/cron:/s/^/#/' ".github/workflows/$WORKFLOW_FILE"
+              
+              if git diff --quiet ".github/workflows/$WORKFLOW_FILE"; then
+                echo "⚠️  No changes detected in workflow file"
+              else
+                git config user.name "github-actions[bot]"
+                git config user.email "github-actions[bot]@users.noreply.github.com"
+                git add ".github/workflows/$WORKFLOW_FILE"
+                git commit -m "🔒 Auto-disable: Billing quota exceeded ($TOTAL_MINUTES/${{ env.BILLING_THRESHOLD }} min)"
+                git push || {
+                  echo "⚠️  Failed to push changes"
+                }
+                
+                echo ""
+                echo "════════════════════════════════════════════════"
+                echo "✅ Workflow schedule disabled via file modification"
+                echo "💡 To re-enable:"
+                echo "   1. Edit .github/workflows/$WORKFLOW_FILE"
+                echo "   2. Uncomment the 'schedule' section"
+                echo "   3. Commit and push changes"
+                echo "════════════════════════════════════════════════"
+              fi
             fi
             
-            echo "🔧 Workflow ID: $WORKFLOW_ID"
-            echo "🔒 Disabling workflow to prevent future triggers..."
-            
-            gh api --method PUT "/repos/$REPO/actions/workflows/$WORKFLOW_ID/disable" || {
-              echo "⚠️  Failed to disable workflow via API"
-            }
-            
             echo ""
-            echo "════════════════════════════════════════════════"
-            echo "✅ Workflow has been disabled successfully"
-            echo "💡 To re-enable:"
-            echo "   1. Go to: https://github.com/$REPO/actions/workflows/$WORKFLOW_FILE"
-            echo "   2. Click 'Enable workflow' button"
-            echo "════════════════════════════════════════════════"
-            echo ""
+            echo "quota_status=exceeded" >> "$GITHUB_OUTPUT"
             exit 1
           else
             REMAINING=$((BILLING_THRESHOLD - TOTAL_MINUTES))
@@ -159,6 +198,7 @@ jobs:
             echo "📈 Remaining buffer: $REMAINING minutes"
             echo "🚀 Proceeding with workflow execution..."
             echo "════════════════════════════════════════════════"
+            echo "quota_status=safe" >> "$GITHUB_OUTPUT"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
