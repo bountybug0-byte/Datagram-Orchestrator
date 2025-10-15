@@ -332,18 +332,21 @@ def invoke_auto_create_or_sync_fork():
     print_info(f"Source: {source_repo}")
     print_info(f"Total users: {len(users_to_process)}")
     
-    # SCAN SEMUA USER DULU
-    user_status = scan_all_users_status(users_to_process, repo_name, source_repo)
+    # PROMPT LANGSUNG DI AWAL
+    print_info("\n🤔 Pilih aksi untuk SEMUA user:")
+    print(f"{Style.CYAN}  y{Style.ENDC} - Delete semua invalid repos & create fork baru")
+    print(f"{Style.CYAN}  n{Style.ENDC} - Skip cleanup, hanya sync valid forks")
     
-    # TAMPILKAN SUMMARY
-    show_scan_summary(user_status)
+    while True:
+        action = input(f"\n{Style.BOLD}[y/n]:{Style.ENDC} ").strip().lower()
+        if action in ['y', 'n']:
+            break
+        print_warning("Invalid input. Masukkan 'y' atau 'n'")
     
-    # PROMPT SEKALI DI AWAL
-    action = prompt_global_action()
-    
-    if action == 'q':
-        print_info("\n⏭️  Cancelled by user")
-        return
+    if action == 'n':
+        print_info("\n⏭️  Mode: Sync only (no cleanup)")
+    else:
+        print_warning("\n🗑️  Mode: Cleanup + Create")
     
     # PROCESSING
     print(f"\n{'='*50}")
