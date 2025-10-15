@@ -1,3 +1,5 @@
+# orchestrator/helpers.py
+
 import os
 import sys
 import json
@@ -154,12 +156,53 @@ def run_command(command: str, env: Optional[Dict[str, str]] = None, timeout: int
         raise
 
 def run_gh_api(command: str, token: str, max_retries: int = 3, timeout: int = 30) -> Dict[str, Any]:
+    """
+    Execute gh CLI command with proper token handling.
+    Supports both shell commands and direct API calls.
+    """
+    # Detect if command uses --jq and replace with raw JSON
+    use_manual_jq = False
+    jq_pattern = None
+    
+    if '--jq' in command:
+        # Extract jq pattern and remove from command
+        jq_match = re.search(r"--jq\s+['\"](.+?)['\"]", command)
+        if jq_match:
+            jq_pattern = jq_match.group(1)
+            # Remove --jq argument from command
+            command = re.sub(r"--jq\s+['\"].+?['\"]", "", command)
+            use_manual_jq = True
+    
     full_command = f"gh {command}"
+    
     for attempt in range(max_retries):
         try:
             result = run_command(full_command, env={"GH_TOKEN": token}, timeout=timeout)
+            
             if result.returncode == 0:
-                return {"success": True, "output": result.stdout.strip(), "error": None}
+                output = result.stdout.strip()
+                
+                # Manual jq processing if needed
+                if use_manual_jq and jq_pattern and output:
+                    try:
+                        data = json.loads(output)
+                        # Handle common jq patterns
+                        if jq_pattern == '.[].name':
+                            if isinstance(data, list):
+                                output = '\n'.join(item.get('name', '') for item in data if isinstance(item, dict))
+                        elif jq_pattern == '.default_branch':
+                            output = data.get('default_branch', 'main')
+                        elif jq_pattern == '.parent.full_name':
+                            parent = data.get('parent', {})
+                            output = parent.get('full_name', '') if parent else ''
+                        elif jq_pattern.startswith('{') or jq_pattern.startswith('['):
+                            # Complex jq patterns - return raw JSON
+                            pass
+                    except (json.JSONDecodeError, KeyError, AttributeError):
+                        # If manual parsing fails, return raw output
+                        pass
+                
+                return {"success": True, "output": output, "error": None}
             
             stderr = result.stderr.lower()
             if any(k in stderr for k in ["timeout", "connection", "network"]) and attempt < max_retries - 1:
