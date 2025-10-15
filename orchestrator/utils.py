@@ -42,9 +42,10 @@ def check_actions_usage(username: str, token: str) -> int:
         billing_data = json.loads(result["output"])
         total_minutes = 0
         
-        # Parse semua item usage
-        if "usage" in billing_data:
-            for item in billing_data["usage"]:
+        # Parse usageItems (bukan usage)
+        if "usageItems" in billing_data:
+            for item in billing_data["usageItems"]:
+                # Filter hanya Minutes dari Actions (exclude storage/GigabyteHours)
                 if (item.get("product") == "actions" and 
                     item.get("unitType") == "Minutes"):
                     total_minutes += item.get("quantity", 0)
