@@ -8,13 +8,12 @@ from orchestrator.helpers import (
     Style, print_success, print_warning, print_error,
     initialize_directories, check_dependencies, press_enter_to_continue
 )
-# Impor dari modul-modul baru
 from orchestrator.setup import (
     initialize_configuration, import_api_keys, show_api_keys_status,
     import_github_tokens, validate_github_tokens
 )
 from orchestrator.collaboration import (
-    invoke_auto_invite, invoke_auto_accept, invoke_auto_fork
+    invoke_auto_invite, invoke_auto_accept, invoke_auto_create_or_sync_fork
 )
 from orchestrator.secrets import (
     invoke_auto_set_secrets
@@ -102,13 +101,13 @@ def main():
                 [
                     invoke_auto_invite,
                     invoke_auto_accept,
-                    invoke_auto_fork,
+                    invoke_auto_create_or_sync_fork,
                     invoke_auto_set_secrets
                 ],
                 [
                     "Auto Invite Collaborators",
                     "Auto Accept Invitations",
-                    "Auto Fork Repository",
+                    "Auto Create or Sync Fork",
                     "Auto Set Secrets"
                 ],
                 "Jalankan secara berurutan dari atas ke bawah"
