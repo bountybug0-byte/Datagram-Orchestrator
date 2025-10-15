@@ -1,15 +1,34 @@
+# File: orchestrator/core.py
+
 import json
 import getpass
 import time
 from pathlib import Path
 from typing import Dict, List, Any
 from .helpers import (
-    print_success, print_error, print_info, print_warning, print_header,
-    write_log, run_gh_api, read_file_lines, append_to_file,
-    load_json_file, save_json_file, run_command, validate_api_key_format,
-    API_KEYS_FILE, TOKENS_FILE, CONFIG_FILE, TOKEN_CACHE_FILE,
-    INVITED_USERS_FILE, ACCEPTED_USERS_FILE, FORKED_REPOS_FILE,
-    SECRETS_SET_FILE
+    print_success,
+    print_error,
+    print_info,
+    print_warning,
+    print_header,
+    write_log,
+    run_gh_api,
+    read_file_lines,
+    append_to_file,
+    load_json_file,
+    save_json_file,
+    run_command,
+    validate_api_key_format,
+    API_KEYS_FILE,
+    TOKENS_FILE,
+    CONFIG_FILE,
+    TOKEN_CACHE_FILE,
+    INVITED_USERS_FILE,
+    ACCEPTED_USERS_FILE,
+    FORKED_REPOS_FILE,
+    SECRETS_SET_FILE,
+    CACHE_DIR,
+    LOGS_DIR
 )
 
 def initialize_configuration():
@@ -37,7 +56,8 @@ def import_api_keys():
         print_info("Masukkan API key (kosongkan untuk selesai)")
         while True:
             key = input(f"API Key #{len(keys) + 1}: ").strip()
-            if not key: break
+            if not key:
+                break
             if not validate_api_key_format(key):
                 print_warning("⚠️ Format API key tidak valid, skip...")
                 continue
@@ -65,7 +85,7 @@ def show_api_keys_status():
     if keys:
         print_info("\nPreview (3 key pertama):")
         for i, key in enumerate(keys[:3], 1):
-            print(f"  {i}. {key[:8]}...{key[-6:]}")
+            print(f" {i}. {key[:8]}...{key[-6:]}")
 
 def import_github_tokens():
     print_header("4. IMPORT GITHUB TOKENS")
@@ -100,17 +120,20 @@ def validate_github_tokens():
         else:
             print_error(f" ❌ Invalid"); invalid_tokens.append(token)
     save_json_file(TOKEN_CACHE_FILE, token_cache)
-    print_success(f"\nValidasi selesai! Valid: {len(valid_tokens)}/{len(tokens)}")
-    if invalid_tokens and input("\nHapus token invalid dari file? (y/n): ").lower() == 'y':
+    if valid_tokens:
         TOKENS_FILE.write_text("\n".join(valid_tokens), encoding="utf-8")
-        print_success("Token invalid telah dihapus.")
+        print_success(f"\nValidasi selesai! Valid: {len(valid_tokens)}/{len(tokens)}. Token invalid otomatis dihapus.")
+    else:
+        print_warning("Tidak ada token valid.")
 
 def invoke_auto_invite():
     print_header("6. AUTO INVITE COLLABORATORS")
     config = load_json_file(CONFIG_FILE)
-    if not config: print_error("Konfigurasi belum diset."); return
+    if not config:
+        print_error("Konfigurasi belum diset."); return
     token_cache = load_json_file(TOKEN_CACHE_FILE)
-    if not token_cache: print_error("Token cache kosong."); return
+    if not token_cache:
+        print_error("Token cache kosong."); return
     invited_users = read_file_lines(INVITED_USERS_FILE)
     main_username = config['main_account_username']
     users_to_invite = [u for u in token_cache.values() if u not in invited_users and u != main_username]
@@ -170,9 +193,11 @@ def invoke_auto_accept():
 def invoke_auto_fork():
     print_header("8. AUTO FORK REPOSITORY")
     config = load_json_file(CONFIG_FILE)
-    if not config: print_error("Konfigurasi belum diset."); return
+    if not config:
+        print_error("Konfigurasi belum diset."); return
     token_cache = load_json_file(TOKEN_CACHE_FILE)
-    if not token_cache: print_error("Token cache kosong."); return
+    if not token_cache:
+        print_error("Token cache kosong."); return
     forked_users = read_file_lines(FORKED_REPOS_FILE)
     main_username = config['main_account_username']
     source_repo = f"{main_username}/{config['main_repo_name']}"
@@ -195,59 +220,54 @@ def invoke_auto_fork():
     print_success(f"\nProses fork selesai! Berhasil: {success_count}/{len(users_to_fork)}")
 
 def enable_actions(repo_path: str, token: str) -> bool:
-    result = run_gh_api(f"api -X PUT repos/{repo_path}/actions/permissions -f enabled=true -f allowed_actions=all", token)
-    return result["success"]
+    max_retries = 3
+    for attempt in range(max_retries):
+        result = run_gh_api(f"api -X PUT repos/{repo_path}/actions/permissions -f enabled=true -f allowed_actions=all", token)
+        if result["success"]:
+            return True
+        print_warning(f"Attempt {attempt + 1}/{max_retries} failed: {result['error']}")
+        time.sleep(5)
+    return False
 
 def enable_workflow_with_retry(repo_path: str, token: str, workflow_file: str) -> bool:
     max_retries = 8
     base_delay = 15
-    
     for attempt in range(max_retries):
         delay = base_delay * (2 ** attempt)
         print_info(f"Attempt {attempt + 1}/{max_retries}: Waiting {delay}s for workflow sync...")
         time.sleep(delay)
-        
         check_result = run_gh_api(f"api repos/{repo_path}/actions/workflows", token, timeout=60)
-        
         if not check_result["success"]:
             print_warning(f"Failed to list workflows: {check_result['error']}")
             continue
-        
         try:
             workflows_data = json.loads(check_result["output"])
             workflows = workflows_data.get("workflows", [])
-            
             workflow_id = None
             for wf in workflows:
                 if wf.get("path") == f".github/workflows/{workflow_file}" or wf.get("name") == workflow_file.replace(".yml", "").replace(".yaml", ""):
                     workflow_id = wf.get("id")
                     break
-            
             if workflow_id:
-                print_success(f"Workflow found with ID: {workflow_id}")
                 enable_result = run_gh_api(f"api -X PUT repos/{repo_path}/actions/workflows/{workflow_id}/enable", token, timeout=30)
-                
                 if enable_result["success"]:
                     print_success(f"✅ Workflow enabled successfully")
                     return True
-                else:
-                    error_msg = enable_result.get("error", "")
-                    if "already enabled" in error_msg.lower():
-                        print_success(f"✅ Workflow already enabled")
-                        return True
-                    print_warning(f"Enable failed: {error_msg}")
+                error_msg = enable_result.get("error", "")
+                if "already enabled" in error_msg.lower():
+                    print_success(f"✅ Workflow already enabled")
+                    return True
+                print_warning(f"Enable failed: {error_msg}")
             else:
                 print_warning(f"Workflow '{workflow_file}' not found in {len(workflows)} available workflows")
                 if attempt == max_retries - 1 and workflows:
                     print_info("Available workflows:")
                     for wf in workflows[:5]:
-                        print(f"  - {wf.get('name')} ({wf.get('path')})")
-        
+                        print(f" - {wf.get('name')} ({wf.get('path')})")
         except json.JSONDecodeError as e:
             print_error(f"JSON decode error: {e}")
         except Exception as e:
             print_error(f"Unexpected error: {e}")
-    
     print_error(f"❌ Failed to enable workflow after {max_retries} attempts")
     return False
 
@@ -260,17 +280,18 @@ def set_secret(repo_path: str, token: str, name: str, value: str, app: str = "")
 def invoke_auto_set_secrets():
     print_header("9. AUTO SET SECRETS")
     config = load_json_file(CONFIG_FILE)
-    if not config: print_error("Konfigurasi belum diset."); return
+    if not config:
+        print_error("Konfigurasi belum diset."); return
     api_keys = read_file_lines(API_KEYS_FILE)
-    if not api_keys: print_error("File API keys kosong."); return
+    if not api_keys:
+        print_error("File API keys kosong."); return
     api_keys_json = json.dumps(api_keys).replace("'", "'\\''")
-    print("Pilih target:\n  1. Main repo saja\n  2. Main repo + semua forked repos")
+    print("Pilih target:\n 1. Main repo saja\n 2. Main repo + semua forked repos")
     choice = input("\nPilihan (1/2): ").strip()
     targets = [{'repo': f"{config['main_account_username']}/{config['main_repo_name']}", 'token': config['main_token']}]
     if choice == '2':
         token_cache, forked_users = load_json_file(TOKEN_CACHE_FILE), read_file_lines(FORKED_REPOS_FILE)
-        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t}
-                        for t, u in token_cache.items() if u in forked_users])
+        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t} for t, u in token_cache.items() if u in forked_users])
     if input(f"\n🎯 Target: {len(targets)} repos. Lanjutkan? (y/n): ").lower() != 'y':
         print_warning("Operasi dibatalkan."); return
     secrets_set_log = read_file_lines(SECRETS_SET_FILE)
@@ -279,39 +300,40 @@ def invoke_auto_set_secrets():
         repo_path, token = target['repo'], target['token']
         print(f"\n[{i}/{len(targets)}] Processing: {repo_path}")
         if repo_path in secrets_set_log:
-            print_info("  ℹ️ Already set (skipped)"); continue
-        print_info("  🔓 Enabling GitHub Actions...")
+            print_info(" ℹ️ Already set (skipped)"); continue
+        print_info(" 🔓 Enabling GitHub Actions...")
         if not enable_actions(repo_path, token):
-            print_error("  ❌ Failed to enable Actions"); continue
+            print_error(" ❌ Failed to enable Actions"); continue
         time.sleep(3)
-        print_info(f"  🔑 Setting secret DATAGRAM_API_KEYS...")
+        print_info(f" 🔑 Setting secret DATAGRAM_API_KEYS...")
         if set_secret(repo_path, token, "DATAGRAM_API_KEYS", api_keys_json):
-            print_success("  ✅ Secret set successfully")
+            print_success(" ✅ Secret set successfully")
             append_to_file(SECRETS_SET_FILE, repo_path)
             success_count += 1
         else:
-            print_error("  ❌ Failed to set secret")
+            print_error(" ❌ Failed to set secret")
         time.sleep(2)
     print_success(f"\n✅ Selesai! Berhasil: {success_count}/{len(targets)}")
 
 def deploy_to_github():
     print_header("10. DEPLOY TO GITHUB")
     config = load_json_file(CONFIG_FILE)
-    if not config: print_error("Konfigurasi belum diset."); return
+    if not config:
+        print_error("Konfigurasi belum diset."); return
     token_cache, forked_users = load_json_file(TOKEN_CACHE_FILE), read_file_lines(FORKED_REPOS_FILE)
-    if not token_cache: print_error("Token cache kosong."); return
+    if not token_cache:
+        print_error("Token cache kosong."); return
     workflow_file = "datagram-runner.yml"
     workflow_source = Path(__file__).parent.parent / ".github" / "workflows" / workflow_file
     if not workflow_source.exists():
         print_error(f"File workflow tidak ditemukan: {workflow_source}"); return
-    print("Pilih target deployment:\n  1. Main repo saja\n  2. Semua forked repos\n  3. Main + semua forks")
+    print("Pilih target deployment:\n 1. Main repo saja\n 2. Semua forked repos\n 3. Main + semua forks")
     choice = input("\nPilihan (1/2/3): ").strip()
     targets = []
     if choice in ['1', '3']:
         targets.append({'repo': f"{config['main_account_username']}/{config['main_repo_name']}", 'token': config['main_token'], 'username': config['main_account_username']})
     if choice in ['2', '3']:
-        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t, 'username': u}
-                        for t, u in token_cache.items() if u in forked_users])
+        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t, 'username': u} for t, u in token_cache.items() if u in forked_users])
     if not targets:
         print_warning("Tidak ada target yang dipilih."); return
     if input(f"\n🎯 Akan deploy ke {len(targets)} repo. Lanjutkan? (y/n): ").lower() != 'y':
@@ -329,148 +351,4 @@ def deploy_to_github():
             clone_result = run_command(f"git clone https://{token}@github.com/{repo_path}.git {temp_dir}", timeout=120)
             if clone_result.returncode != 0:
                 print_error(f"❌ Clone failed: {clone_result.stderr}"); continue
-            workflow_dir = temp_dir / ".github" / "workflows"
-            workflow_dir.mkdir(parents=True, exist_ok=True)
-            workflow_path = workflow_dir / workflow_file
-            workflow_path.write_text(workflow_content, encoding='utf-8')
-            print_success(f"✅ Workflow file created: {workflow_file}")
-            print_info("📤 Committing and pushing...")
-            commit_commands = [
-                f"cd {temp_dir} && git config user.name 'Datagram Bot'",
-                f"cd {temp_dir} && git config user.email 'bot@datagram.local'",
-                f"cd {temp_dir} && git add .github/workflows/{workflow_file}",
-                f"cd {temp_dir} && git commit -m 'Deploy Datagram workflow'",
-                f"cd {temp_dir} && git push origin main"
-            ]
-            for cmd in commit_commands:
-                result = run_command(cmd, timeout=60)
-                if result.returncode != 0 and "nothing to commit" not in result.stdout.lower():
-                    print_error(f"❌ Command failed: {cmd}\n{result.stderr}"); break
-            else:
-                print_success("✅ Workflow pushed to repository")
-                print_info("⏳ Waiting for GitHub to sync workflow (10s)...")
-                time.sleep(10)
-                print_info("🔧 Enabling GitHub Actions...")
-                if enable_actions(repo_path, token):
-                    print_success("✅ Actions enabled")
-                    print_info(f"🔄 Enabling workflow: {workflow_file}")
-                    if enable_workflow_with_retry(repo_path, token, workflow_file):
-                        print_success("✅ Workflow enabled successfully!")
-                        success_count += 1
-                    else:
-                        print_warning("⚠️ Workflow file deployed but auto-enable failed. Enable manually at:")
-                        print(f"   https://github.com/{repo_path}/actions")
-                else:
-                    print_error("❌ Failed to enable Actions")
-        except Exception as e:
-            print_error(f"❌ Deployment error: {e}")
-        finally:
-            if temp_dir.exists():
-                import shutil
-                shutil.rmtree(temp_dir, ignore_errors=True)
-        time.sleep(3)
-    print(f"\n{'='*47}")
-    print_success(f"✅ Deployment selesai! Berhasil: {success_count}/{len(targets)}")
-    print(f"{'='*47}")
-
-def invoke_workflow_trigger():
-    print_header("11. TRIGGER WORKFLOW")
-    config = load_json_file(CONFIG_FILE)
-    if not config: print_error("Konfigurasi belum diset."); return
-    token_cache, forked_users = load_json_file(TOKEN_CACHE_FILE), read_file_lines(FORKED_REPOS_FILE)
-    workflow_file = "datagram-runner.yml"
-    print("Pilih target:\n  1. Main repo saja\n  2. Semua forked repos\n  3. Main + semua forks")
-    choice = input("\nPilihan (1/2/3): ").strip()
-    targets = []
-    if choice in ['1', '3']:
-        targets.append({'repo': f"{config['main_account_username']}/{config['main_repo_name']}", 'token': config['main_token']})
-    if choice in ['2', '3']:
-        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t}
-                        for t, u in token_cache.items() if u in forked_users])
-    if not targets:
-        print_warning("Tidak ada target yang dipilih."); return
-    print_info(f"\n🎯 Akan trigger workflow di {len(targets)} repo...")
-    success_count = 0
-    for i, target in enumerate(targets, 1):
-        repo_path, token = target['repo'], target['token']
-        print(f"[{i}/{len(targets)}] Triggering: {repo_path}...", end="", flush=True)
-        result = run_gh_api(f"api -X POST repos/{repo_path}/actions/workflows/{workflow_file}/dispatches -f ref=main", token)
-        if result["success"]:
-            print_success(" ✅")
-            success_count += 1
-        else:
-            print_error(f" ❌ {result['error']}")
-        time.sleep(2)
-    print_success(f"\n✅ Selesai! Berhasil trigger: {success_count}/{len(targets)}")
-
-def show_workflow_status():
-    print_header("12. SHOW WORKFLOW STATUS")
-    config = load_json_file(CONFIG_FILE)
-    if not config: print_error("Konfigurasi belum diset."); return
-    token_cache, forked_users = load_json_file(TOKEN_CACHE_FILE), read_file_lines(FORKED_REPOS_FILE)
-    print("Pilih target:\n  1. Main repo saja\n  2. Semua forked repos\n  3. Main + semua forks")
-    choice = input("\nPilihan (1/2/3): ").strip()
-    targets = []
-    if choice in ['1', '3']:
-        targets.append({'repo': f"{config['main_account_username']}/{config['main_repo_name']}", 'token': config['main_token']})
-    if choice in ['2', '3']:
-        targets.extend([{'repo': f"{u}/{config['main_repo_name']}", 'token': t}
-                        for t, u in token_cache.items() if u in forked_users])
-    if not targets:
-        print_warning("Tidak ada target yang dipilih."); return
-    print(f"\n{'='*47}")
-    print_header("WORKFLOW STATUS REPORT")
-    for i, target in enumerate(targets, 1):
-        repo_path, token = target['repo'], target['token']
-        print(f"\n[{i}/{len(targets)}] {repo_path}")
-        result = run_gh_api(f"api repos/{repo_path}/actions/runs?per_page=5", token)
-        if result["success"]:
-            try:
-                runs = json.loads(result["output"])
-                total_runs = runs.get("total_count", 0)
-                print(f"  📊 Total runs: {total_runs}")
-                if runs.get("workflow_runs"):
-                    print("  📋 Latest runs:")
-                    for run in runs["workflow_runs"][:3]:
-                        status = run.get("status", "unknown")
-                        conclusion = run.get("conclusion", "N/A")
-                        created = run.get("created_at", "")[:10]
-                        print(f"    • {status.upper()} ({conclusion}) - {created}")
-                else:
-                    print_info("  ℹ️ No runs found")
-            except json.JSONDecodeError:
-                print_error("  ❌ Failed to parse response")
-        else:
-            print_error(f"  ❌ {result['error']}")
-    print(f"\n{'='*47}")
-
-def view_logs():
-    print_header("13. VIEW LOGS")
-    from .helpers import LOGS_DIR
-    log_file = LOGS_DIR / "setup.log"
-    if not log_file.exists():
-        print_warning("File log tidak ditemukan."); return
-    print_info(f"Lokasi: {log_file}\n")
-    lines = log_file.read_text(encoding='utf-8').strip().split('\n')
-    print(f"📄 Showing last 30 lines:\n{'-'*47}")
-    for line in lines[-30:]:
-        print(line)
-    print(f"{'-'*47}")
-
-def clean_cache():
-    print_header("14. CLEAN CACHE")
-    from .helpers import CACHE_DIR
-    if not CACHE_DIR.exists():
-        print_warning("Cache directory tidak ditemukan."); return
-    cache_files = list(CACHE_DIR.glob("*"))
-    if not cache_files:
-        print_success("✅ Cache sudah kosong."); return
-    print_warning(f"⚠️ Akan menghapus {len(cache_files)} file cache:")
-    for f in cache_files:
-        print(f"  - {f.name}")
-    if input("\nLanjutkan? (y/n): ").lower() == 'y':
-        for f in cache_files:
-            f.unlink()
-        print_success("✅ Cache berhasil dibersihkan.")
-    else:
-        print_warning("Operasi dibatalkan.")
+            workflow_dir = temp_dir / ".github" / "
