@@ -35,13 +35,14 @@ concurrency:
   group: datagram-${{ github.ref }}-${{ github.run_number }}
   cancel-in-progress: false
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   check-billing:
     name: 🔒 Billing Quota Check
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
     outputs:
       quota_status: ${{ steps.check.outputs.quota_status }}
     steps:
