@@ -281,3 +281,70 @@ def remove_line_from_file(file_path: Path, line_to_remove: str):
     except Exception as e:
         write_log(f"Error removing line from {file_path}: {str(e)}")
         raise
+
+def get_workflow_id(repo_path: str, token: str, workflow_file: str) -> Optional[int]:
+    """Get workflow ID by workflow filename."""
+    result = run_gh_api(f"api repos/{repo_path}/actions/workflows", token, timeout=60)
+    if not result["success"]:
+        write_log(f"Failed to list workflows for {repo_path}: {result.get('error')}")
+        return None
+    
+    try:
+        workflows = json.loads(result["output"]).get("workflows", [])
+        for workflow in workflows:
+            if workflow_file in workflow.get("path", ""):
+                return workflow.get("id")
+        return None
+    except (json.JSONDecodeError, KeyError):
+        write_log(f"Failed to parse workflows JSON for {repo_path}")
+        return None
+
+def disable_workflow(repo_path: str, token: str, workflow_file: str) -> bool:
+    """Disable a workflow in the repository."""
+    workflow_id = get_workflow_id(repo_path, token, workflow_file)
+    if not workflow_id:
+        write_log(f"Workflow '{workflow_file}' not found in {repo_path}")
+        return False
+    
+    result = run_gh_api(
+        f"api -X PUT repos/{repo_path}/actions/workflows/{workflow_id}/disable",
+        token,
+        timeout=30
+    )
+    
+    if result["success"]:
+        write_log(f"Workflow disabled: {repo_path}/{workflow_file}")
+        return True
+    
+    error = result.get("error", "").lower()
+    if "already disabled" in error or "not enabled" in error:
+        write_log(f"Workflow already disabled: {repo_path}/{workflow_file}")
+        return True
+    
+    write_log(f"Failed to disable workflow {repo_path}/{workflow_file}: {result.get('error')}")
+    return False
+
+def enable_workflow(repo_path: str, token: str, workflow_file: str) -> bool:
+    """Enable a workflow in the repository."""
+    workflow_id = get_workflow_id(repo_path, token, workflow_file)
+    if not workflow_id:
+        write_log(f"Workflow '{workflow_file}' not found in {repo_path}")
+        return False
+    
+    result = run_gh_api(
+        f"api -X PUT repos/{repo_path}/actions/workflows/{workflow_id}/enable",
+        token,
+        timeout=30
+    )
+    
+    if result["success"]:
+        write_log(f"Workflow enabled: {repo_path}/{workflow_file}")
+        return True
+    
+    error = result.get("error", "").lower()
+    if "already enabled" in error:
+        write_log(f"Workflow already enabled: {repo_path}/{workflow_file}")
+        return True
+    
+    write_log(f"Failed to enable workflow {repo_path}/{workflow_file}: {result.get('error')}")
+    return False

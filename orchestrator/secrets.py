@@ -90,6 +90,10 @@ def invoke_auto_set_secrets():
         print_error("Konfigurasi belum diset.")
         return
 
+    token_cache = load_json_file(TOKEN_CACHE_FILE)
+    total_accounts = len(token_cache)
+    print_info(f"📊 Memulai proses untuk {total_accounts} akun...")
+
     api_keys = read_file_lines(API_KEYS_FILE)
     if not api_keys:
         print_error("File API keys kosong.")
@@ -106,7 +110,6 @@ def invoke_auto_set_secrets():
     }]
 
     if choice == '2':
-        token_cache = load_json_file(TOKEN_CACHE_FILE)
         forked_users = read_file_lines(FORKED_REPOS_FILE)
         targets.extend([
             {'repo': f"{u}/{config['main_repo_name']}", 'token': t}
@@ -119,7 +122,7 @@ def invoke_auto_set_secrets():
 
     secrets_set_log = read_file_lines(SECRETS_SET_FILE)
     success_count = 0
-    failed_repos = []
+    failed_count = 0
 
     for i, target in enumerate(targets, 1):
         repo_path = target['repo']
@@ -138,16 +141,11 @@ def invoke_auto_set_secrets():
             success_count += 1
         else:
             print_error(" ❌ Failed to set secret")
-            failed_repos.append(repo_path)
+            failed_count += 1
 
         time.sleep(2)
 
     print_success(f"\n{'='*47}")
-    print_success(f"✅ Selesai! Berhasil: {success_count}/{len(targets)}")
-
-    if failed_repos:
-        print_warning(f"\n⚠️ Failed repos ({len(failed_repos)}):")
-        for repo in failed_repos:
-            print_warning(f"  - {repo}")
-
+    print_success(f"✅ Proses selesai!")
+    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {len(targets)}")
     print_success(f"{'='*47}")

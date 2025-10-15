@@ -22,7 +22,7 @@ from orchestrator.deployment import (
     deploy_to_github, invoke_workflow_trigger, show_workflow_status
 )
 from orchestrator.utils import (
-    view_logs, clean_cache
+    view_logs, clean_cache, manual_workflow_control
 )
 
 
@@ -130,11 +130,13 @@ def main():
                 "🔧 Utilities",
                 [
                     view_logs,
-                    clean_cache
+                    clean_cache,
+                    manual_workflow_control
                 ],
                 [
                     "View Logs",
-                    "Clean Cache"
+                    "Clean Cache",
+                    "Manual Workflow Control"
                 ]
             )
         }

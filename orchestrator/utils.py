@@ -8,13 +8,18 @@ from .helpers import (
     print_warning,
     print_header,
     run_gh_api,
+    enable_workflow,
+    disable_workflow,
+    load_json_file,
+    read_file_lines,
     LOGS_DIR,
     TOKEN_CACHE_FILE,
     INVITED_USERS_FILE,
     ACCEPTED_USERS_FILE,
     FORKED_REPOS_FILE,
     SECRETS_SET_FILE,
-    WORKFLOWS_ENABLED_FILE
+    WORKFLOWS_ENABLED_FILE,
+    CONFIG_FILE
 )
 
 def check_actions_usage(username: str, token: str) -> int:
@@ -42,9 +47,10 @@ def check_actions_usage(username: str, token: str) -> int:
         billing_data = json.loads(result["output"])
         total_minutes = 0
         
-        # Parse semua item usage
-        if "usage" in billing_data:
-            for item in billing_data["usage"]:
+        # Parse usageItems (bukan usage)
+        if "usageItems" in billing_data:
+            for item in billing_data["usageItems"]:
+                # Filter hanya Minutes dari Actions (exclude storage/GigabyteHours)
                 if (item.get("product") == "actions" and 
                     item.get("unitType") == "Minutes"):
                     total_minutes += item.get("quantity", 0)
@@ -124,3 +130,100 @@ def clean_cache():
             print_warning(f"{name} tidak ditemukan atau operasi dibatalkan.")
     else:
         print_warning("Pilihan tidak valid.")
+
+
+def manual_workflow_control():
+    """Kontrol manual enable/disable workflow secara massal."""
+    print_header("MANUAL WORKFLOW CONTROL")
+    
+    config = load_json_file(CONFIG_FILE)
+    token_cache = load_json_file(TOKEN_CACHE_FILE)
+    
+    if not config or not token_cache:
+        print_error("Konfigurasi atau token cache tidak ditemukan.")
+        return
+    
+    total_accounts = len(token_cache)
+    print_info(f"📊 Memulai proses untuk {total_accounts} akun...")
+    
+    print("\nPilih target:")
+    print(" 1. Main repo saja")
+    print(" 2. Semua forked repos")
+    print(" 3. Main + semua forks")
+    print(" 0. Batal")
+    
+    target_choice = input("\nPilihan (0-3): ").strip()
+    
+    if target_choice == '0':
+        print_warning("Operasi dibatalkan.")
+        return
+    
+    forked_users = read_file_lines(FORKED_REPOS_FILE)
+    targets = []
+    
+    if target_choice in ['1', '3']:
+        targets.append({
+            'repo': f"{config['main_account_username']}/{config['main_repo_name']}",
+            'token': config['main_token']
+        })
+    if target_choice in ['2', '3']:
+        targets.extend([
+            {'repo': f"{u}/{config['main_repo_name']}", 'token': t}
+            for t, u in token_cache.items() if u in forked_users
+        ])
+    
+    if not targets:
+        print_warning("Tidak ada target yang dipilih.")
+        return
+    
+    print("\nPilih aksi:")
+    print(" 1. Enable workflow")
+    print(" 2. Disable workflow")
+    print(" 0. Batal")
+    
+    action_choice = input("\nPilihan (0-2): ").strip()
+    
+    if action_choice == '0':
+        print_warning("Operasi dibatalkan.")
+        return
+    
+    workflow_file = "datagram-runner.yml"
+    
+    if input(f"\n🎯 Akan memproses {len(targets)} repos. Lanjutkan? (y/n): ").lower() != 'y':
+        print_warning("Operasi dibatalkan.")
+        return
+    
+    success_count = 0
+    failed_count = 0
+    
+    for i, target in enumerate(targets, 1):
+        repo_path = target['repo']
+        token = target['token']
+        
+        print(f"\n[{i}/{len(targets)}] Processing: {repo_path}")
+        
+        if action_choice == '1':
+            if enable_workflow(repo_path, token, workflow_file):
+                print_success("✅ Workflow enabled")
+                success_count += 1
+            else:
+                print_error("❌ Failed to enable workflow")
+                failed_count += 1
+        elif action_choice == '2':
+            if disable_workflow(repo_path, token, workflow_file):
+                print_success("✅ Workflow disabled")
+                success_count += 1
+            else:
+                print_error("❌ Failed to disable workflow")
+                failed_count += 1
+        else:
+            print_warning("Pilihan tidak valid.")
+            return
+        
+        import time
+        time.sleep(1)
+    
+    print_success(f"\n{'='*47}")
+    print_success(f"✅ Proses selesai!")
+    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {len(targets)}")
+    print_success(f"{'='*47}")
