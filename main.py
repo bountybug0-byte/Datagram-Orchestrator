@@ -1,18 +1,31 @@
+# main.py
+
 import os
 import sys
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Callable
 from orchestrator.helpers import (
     Style, print_success, print_warning, print_error,
     initialize_directories, check_dependencies, press_enter_to_continue
 )
-from orchestrator.core import (
+# Impor dari modul-modul baru
+from orchestrator.setup import (
     initialize_configuration, import_api_keys, show_api_keys_status,
-    import_github_tokens, validate_github_tokens, invoke_auto_invite,
-    invoke_auto_accept, invoke_auto_fork, invoke_auto_set_secrets,
-    deploy_to_github, invoke_workflow_trigger, show_workflow_status,
+    import_github_tokens, validate_github_tokens
+)
+from orchestrator.collaboration import (
+    invoke_auto_invite, invoke_auto_accept, invoke_auto_fork
+)
+from orchestrator.secrets import (
+    invoke_auto_set_secrets
+)
+from orchestrator.deployment import (
+    deploy_to_github, invoke_workflow_trigger, show_workflow_status
+)
+from orchestrator.utils import (
     view_logs, clean_cache
 )
+
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -42,7 +55,7 @@ def show_submenu(title: str, options: List[str], tip: str = ""):
     print(f"\n{Style.WARNING} 0.{Style.ENDC} ← Kembali ke Main Menu")
     print("\n" + "═" * 47)
 
-def handle_menu(title: str, actions: List[Any], options: List[str], tip: str = ""):
+def handle_menu(title: str, actions: List[Callable], options: List[str], tip: str = ""):
     action_map = {str(i): action for i, action in enumerate(actions, 1)}
     while True:
         show_submenu(title, options, tip)
@@ -64,8 +77,8 @@ def main():
     try:
         initialize_directories()
         check_dependencies()
-        
-        menu_definitions = {
+
+        menu_definitions: Dict[str, tuple] = {
             '1': (
                 "📋 Setup & Konfigurasi",
                 [
@@ -126,22 +139,22 @@ def main():
                 ]
             )
         }
-        
+
         while True:
             show_main_menu()
             choice = input("Pilih menu (0-4): ").strip()
-            
+
             if choice == '0':
                 print_success("\nTerima kasih! Program berhenti.")
                 break
-            
+
             if choice in menu_definitions:
                 title, actions, options, *tip = menu_definitions[choice]
                 handle_menu(title, actions, options, tip[0] if tip else "")
             else:
                 print_warning("Pilihan tidak valid.")
                 time.sleep(1)
-    
+
     except KeyboardInterrupt:
         print_warning("\n\nProgram dihentikan oleh user.")
     except Exception as e:
