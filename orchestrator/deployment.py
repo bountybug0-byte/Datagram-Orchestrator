@@ -22,6 +22,25 @@ from .helpers import (
     WORKFLOWS_ENABLED_FILE
 )
 
+def enable_actions_on_repo(repo_path: str, token: str) -> bool:
+    """Mengaktifkan GitHub Actions pada repositori."""
+    print_info("🔧 Enabling GitHub Actions on repository...")
+    
+    # Set Actions permissions ke 'all'
+    result = run_gh_api(
+        f"api -X PUT repos/{repo_path}/actions/permissions -f enabled=true -f allowed_actions=all",
+        token,
+        timeout=30
+    )
+    
+    if result["success"]:
+        print_success("✅ Actions enabled on repository")
+        time.sleep(2)
+        return True
+    else:
+        print_warning(f"⚠️ Failed to enable Actions: {result.get('error')}")
+        return False
+
 def enable_workflow_with_retry(repo_path: str, token: str, workflow_file: str) -> bool:
     """Mencoba mengaktifkan workflow dengan beberapa kali percobaan."""
     max_retries = 5
@@ -95,6 +114,9 @@ def deploy_to_github():
     for i, target in enumerate(targets, 1):
         repo_path, token, username = target['repo'], target['token'], target['username']
         print(f"\n{'='*47}\n[{i}/{len(targets)}] Deploying to: {repo_path}\n{'='*47}")
+
+        # Aktifkan GitHub Actions di level repository
+        enable_actions_on_repo(repo_path, token)
 
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir = Path(temp_dir_str)
