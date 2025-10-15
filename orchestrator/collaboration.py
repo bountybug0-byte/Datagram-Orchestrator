@@ -118,9 +118,8 @@ def get_user_repos_matching_pattern(token: str, repo_name: str) -> list:
     Mendapatkan semua repo milik authenticated user yang match pattern.
     
     Returns:
-        List of repo names yang match pattern
+        List of unique repo names yang match pattern
     """
-    # Gunakan user/repos dengan jq untuk extract names
     result = run_gh_api(
         "api user/repos --paginate --jq '.[].name'",
         token,
@@ -136,8 +135,8 @@ def get_user_repos_matching_pattern(token: str, repo_name: str) -> list:
         print_warning("\n    ⚠️ No repos found")
         return []
     
-    matching_repos = []
-    # Pattern: exact match atau dengan suffix -1, -2, dst
+    # Use set for deduplication
+    matching_repos_set = set()
     pattern = re.compile(rf'^{re.escape(repo_name)}(-\d+)?$', re.IGNORECASE)
     
     lines = result["output"].strip().split('\n')
@@ -148,8 +147,13 @@ def get_user_repos_matching_pattern(token: str, repo_name: str) -> list:
             continue
         repo = line.strip().strip('"').strip("'")
         if pattern.match(repo):
-            matching_repos.append(repo)
-            print_warning(f"    ⚠️ Found: {repo}")
+            matching_repos_set.add(repo)
+    
+    # Convert to sorted list for consistent ordering
+    matching_repos = sorted(matching_repos_set)
+    
+    for repo in matching_repos:
+        print_warning(f"    ⚠️ Found: {repo}")
     
     return matching_repos
 
@@ -226,7 +230,7 @@ def force_cleanup_all_matching_repos(username: str, token: str, repo_name: str, 
         print_info("\n    ℹ️ No matching repos to clean")
         return 0
     
-    print_warning(f"\n    🎯 Found {len(matching_repos)} repo(s) to clean")
+    print_warning(f"\n    🎯 Found {len(matching_repos)} unique repo(s) to clean")
     
     deleted_count = 0
     for repo in matching_repos:
