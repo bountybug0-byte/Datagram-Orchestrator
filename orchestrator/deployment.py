@@ -16,6 +16,8 @@ from .helpers import (
     append_to_file,
     load_json_file,
     run_command,
+    disable_workflow,
+    enable_workflow,
     CONFIG_FILE,
     TOKEN_CACHE_FILE,
     FORKED_REPOS_FILE,
@@ -29,8 +31,9 @@ def enable_actions_on_repo(repo_path: str, token: str) -> bool:
     """Mengaktifkan GitHub Actions pada repositori."""
     print_info("🔧 Enabling GitHub Actions on repository...")
     
+    # PERBAIKAN: Menggunakan --raw-field untuk mengirim boolean dengan benar dan mencegah error 422
     result = run_gh_api(
-        f"api -X PUT repos/{repo_path}/actions/permissions -F enabled=true -F allowed_actions=all",
+        f"api -X PUT repos/{repo_path}/actions/permissions --raw-field enabled=true --raw-field allowed_actions=all",
         token,
         timeout=30
     )
@@ -40,43 +43,13 @@ def enable_actions_on_repo(repo_path: str, token: str) -> bool:
         time.sleep(2)
         return True
     else:
+        # Menambahkan penanganan error yang lebih baik jika dijalankan pada akun personal
+        error_msg = result.get('error', '').lower()
+        if "must be an organization" in error_msg:
+             print_info("ℹ️  Skipping for personal account (not required)")
+             return True
         print_warning(f"⚠️ Failed to enable Actions: {result.get('error')}")
         return False
-
-
-def enable_workflow_with_retry(repo_path: str, token: str, workflow_file: str) -> bool:
-    """Mencoba mengaktifkan workflow dengan beberapa kali percobaan."""
-    max_retries = 5
-    delay = 10
-    
-    for attempt in range(max_retries):
-        print_info(f"Attempt {attempt + 1}/{max_retries}: Checking workflows...")
-        time.sleep(delay * (attempt + 1))
-        
-        check_result = run_gh_api(f"api repos/{repo_path}/actions/workflows", token, timeout=60)
-        if not check_result["success"]:
-            print_warning(f"Failed to list workflows: {check_result['error']}")
-            continue
-        
-        try:
-            workflows = json.loads(check_result["output"]).get("workflows", [])
-            workflow_id = next((wf.get("id") for wf in workflows if workflow_file in wf.get("path", "")), None)
-
-            if workflow_id:
-                enable_result = run_gh_api(
-                    f"api -X PUT repos/{repo_path}/actions/workflows/{workflow_id}/enable", token, timeout=30
-                )
-                if enable_result["success"] or "already enabled" in enable_result.get("error", "").lower():
-                    print_success(f"✅ Workflow enabled (ID: {workflow_id})")
-                    return True
-                print_warning(f"Enable failed: {enable_result.get('error')}")
-            else:
-                print_warning(f"Workflow '{workflow_file}' not found.")
-        except json.JSONDecodeError as e:
-            print_error(f"JSON decode error: {e}")
-
-    print_error(f"❌ Failed to enable workflow after {max_retries} attempts")
-    return False
 
 
 def deploy_to_github():
@@ -85,9 +58,13 @@ def deploy_to_github():
     config = load_json_file(CONFIG_FILE)
     token_cache = load_json_file(TOKEN_CACHE_FILE)
     forked_users = read_file_lines(FORKED_REPOS_FILE)
+    
     if not config or not token_cache:
         print_error("Konfigurasi atau cache token tidak lengkap.")
         return
+
+    total_accounts = len(token_cache)
+    print_info(f"📊 Memulai proses untuk {total_accounts} akun...")
 
     workflow_file = "datagram-runner.yml"
     workflow_source = Path(__file__).parent.parent / ".github" / "workflows" / workflow_file
@@ -114,19 +91,19 @@ def deploy_to_github():
     workflow_content = workflow_source.read_text(encoding='utf-8')
     workflows_enabled = read_file_lines(WORKFLOWS_ENABLED_FILE)
     success_count = 0
-    source_repo = f"{config['main_account_username']}/{config['main_repo_name']}"
+    failed_count = 0
+    main_username = config['main_account_username']
 
     for i, target in enumerate(targets, 1):
         repo_path, token, username = target['repo'], target['token'], target['username']
         print(f"\n{'='*47}\n[{i}/{len(targets)}] Deploying to: {repo_path}\n{'='*47}")
 
-        # Sync fork sebelum deployment (hanya untuk fork, bukan main repo)
-        if username != config['main_account_username']:
-            print_info("🔄 Syncing fork with upstream...")
+        if username != main_username:
+            print_info("🔄 Menyinkronkan fork...")
             if sync_fork_with_upstream(repo_path, token):
-                print_success("✅ Fork synced")
+                print_success("✅ Fork berhasil disinkronkan")
             else:
-                print_warning("⚠️ Fork sync failed, continuing anyway...")
+                print_warning("⚠️ Sinkronisasi fork gagal, melanjutkan deployment...")
             time.sleep(2)
 
         enable_actions_on_repo(repo_path, token)
@@ -139,6 +116,7 @@ def deploy_to_github():
                 clone_result = run_command(clone_cmd, cwd=temp_dir, timeout=120)
                 if clone_result.returncode != 0:
                     print_error(f"❌ Clone failed: {clone_result.stderr}")
+                    failed_count += 1
                     continue
 
                 workflow_dir = temp_dir / ".github" / "workflows"
@@ -154,42 +132,37 @@ def deploy_to_github():
                 
                 if "nothing to commit" in commit_result.stdout.lower():
                     print_info("ℹ️ No changes to commit.")
-                    if repo_path not in workflows_enabled:
-                         if enable_workflow_with_retry(repo_path, token, workflow_file):
-                            append_to_file(WORKFLOWS_ENABLED_FILE, repo_path)
                     success_count += 1
                     continue
+                
+                print_info("🔒 Disabling workflow before push...")
+                disable_workflow(repo_path, token, workflow_file)
+                time.sleep(2)
 
                 push_result = run_command(f"git push", cwd=temp_dir, timeout=120)
                 if push_result.returncode == 0:
                     print_success("✅ Push successful")
                     if repo_path not in workflows_enabled:
-                        print_info("🔄 Enabling workflow...")
-                        if enable_workflow_with_retry(repo_path, token, workflow_file):
-                            append_to_file(WORKFLOWS_ENABLED_FILE, repo_path)
+                        append_to_file(WORKFLOWS_ENABLED_FILE, repo_path)
                     success_count += 1
                 else:
                     print_error(f"❌ Push failed: {push_result.stderr}")
+                    failed_count += 1
 
             except Exception as e:
                 print_error(f"❌ Error during deployment: {str(e)}")
+                failed_count += 1
             time.sleep(2)
 
-    print_success(f"\n{'='*47}\n✅ Deployment completed! Success: {success_count}/{len(targets)}\n{'='*47}")
+    print_success(f"\n{'='*47}")
+    print_success(f"✅ Deployment selesai!")
+    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {len(targets)}")
+    print_success(f"{'='*47}")
 
 
 def wait_for_workflow_completion(repo_path: str, token: str, run_id: int, timeout: int = 21600) -> bool:
     """
     Menunggu hingga workflow run selesai (completed).
-    
-    Args:
-        repo_path: Path repositori (owner/repo)
-        token: GitHub token
-        run_id: ID workflow run yang akan dimonitor
-        timeout: Maksimal waktu tunggu dalam detik (default: 6 jam)
-        
-    Returns:
-        True jika workflow selesai, False jika timeout atau error
     """
     start_time = time.time()
     poll_interval = 30
@@ -216,10 +189,9 @@ def wait_for_workflow_completion(repo_path: str, token: str, run_id: int, timeou
             if status == "completed":
                 if conclusion == "success":
                     print_success(f"✅ Workflow selesai dengan status: {conclusion}")
-                    return True
                 else:
                     print_warning(f"⚠️ Workflow selesai dengan status: {conclusion}")
-                    return True
+                return True
             
             elapsed = int(time.time() - start_time)
             print_info(f"   Status: {status} | Elapsed: {elapsed//60}m {elapsed%60}s")
@@ -243,6 +215,9 @@ def invoke_workflow_trigger():
     if not config or not token_cache:
         print_error("Konfigurasi atau cache token tidak lengkap.")
         return
+
+    total_accounts = len(token_cache)
+    print_info(f"📊 Memulai proses untuk {total_accounts} akun...")
 
     print("Pilih target:\n 1. Main repo saja\n 2. Semua forked repos\n 3. Main + semua forks")
     choice = input("\nPilihan (1/2/3): ").strip()
@@ -271,6 +246,7 @@ def invoke_workflow_trigger():
     workflow_file = "datagram-runner.yml"
     billing_threshold = 1800
     success_count = 0
+    failed_count = 0
     
     print_info(f"\n🚀 Akan memicu workflow untuk {len(targets)} akun secara BERURUTAN")
     print_warning(f"⚠️ Ambang batas billing: {billing_threshold} menit")
@@ -288,7 +264,6 @@ def invoke_workflow_trigger():
         print(f"[{i}/{len(targets)}] Processing: {username}")
         print('='*50)
         
-        # Check billing usage
         print_info("📊 Mengecek penggunaan Actions...")
         usage_minutes = check_actions_usage(username, token)
         print_info(f"   Total menit terpakai: {usage_minutes}/{billing_threshold}")
@@ -297,9 +272,17 @@ def invoke_workflow_trigger():
             print_warning(f"⚠️ PERINGATAN: Penggunaan Actions ({usage_minutes} menit) melebihi threshold!")
             if input(f"   Tetap lanjutkan untuk {username}? (y/n): ").lower() != 'y':
                 print_warning(f"⏭️ Melewati {username}")
+                failed_count += 1
                 continue
         
-        # Trigger workflow
+        print_info("🔓 Enabling workflow...")
+        if not enable_workflow(repo_path, token, workflow_file):
+            print_error("❌ Gagal enable workflow")
+            failed_count += 1
+            continue
+        
+        time.sleep(3)
+        
         print_info(f"🚀 Memicu workflow untuk {repo_path}...")
         trigger_result = run_gh_api(
             f"api -X POST repos/{repo_path}/actions/workflows/{workflow_file}/dispatches -f ref=main",
@@ -309,14 +292,13 @@ def invoke_workflow_trigger():
         
         if not trigger_result["success"]:
             print_error(f"❌ Gagal memicu workflow: {trigger_result.get('error')}")
+            failed_count += 1
             continue
         
         print_success("✅ Workflow berhasil dipicu")
         
-        # Tunggu sebentar agar workflow run muncul di API
         time.sleep(10)
         
-        # Ambil run_id terbaru
         print_info("🔍 Mencari workflow run yang baru saja dipicu...")
         runs_result = run_gh_api(
             f"api repos/{repo_path}/actions/runs?per_page=1",
@@ -326,6 +308,7 @@ def invoke_workflow_trigger():
         
         if not runs_result["success"]:
             print_error(f"❌ Gagal mengambil workflow runs: {runs_result.get('error')}")
+            failed_count += 1
             continue
         
         try:
@@ -334,33 +317,39 @@ def invoke_workflow_trigger():
             
             if not workflow_runs:
                 print_error("❌ Tidak ada workflow run ditemukan")
+                failed_count += 1
                 continue
             
             run_id = workflow_runs[0].get("id")
             if not run_id:
                 print_error("❌ Run ID tidak valid")
+                failed_count += 1
                 continue
             
             print_info(f"🎯 Monitoring workflow run ID: {run_id}")
             
-            # Tunggu hingga selesai
             if wait_for_workflow_completion(repo_path, token, run_id):
+                print_info("🔒 Disabling workflow after completion...")
+                disable_workflow(repo_path, token, workflow_file)
+                
                 success_count += 1
                 print_success(f"✅ Akun {username} selesai\n")
             else:
                 print_error(f"❌ Akun {username} gagal atau timeout\n")
+                failed_count += 1
             
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             print_error(f"❌ Error parsing workflow runs: {str(e)}")
+            failed_count += 1
             continue
         
-        # Delay sebelum proses akun berikutnya
         if i < len(targets):
             print_info("⏸️ Delay 5 detik sebelum akun berikutnya...")
             time.sleep(5)
 
     print_success(f"\n{'='*50}")
-    print_success(f"✅ Selesai! Berhasil: {success_count}/{len(targets)}")
+    print_success(f"✅ Proses selesai!")
+    print_info(f"   Berhasil: {success_count}, Gagal/Dilewati: {failed_count}, Total: {len(targets)}")
     print_success('='*50)
 
 
@@ -374,6 +363,9 @@ def show_workflow_status():
     if not config or not token_cache:
         print_error("Konfigurasi atau cache token tidak lengkap.")
         return
+
+    total_accounts = len(token_cache)
+    print_info(f"📊 Memulai proses untuk {total_accounts} akun...")
 
     print("Pilih target:\n 1. Main repo saja\n 2. Semua forked repos\n 3. Main + semua forks")
     choice = input("\nPilihan (1/2/3): ").strip()
@@ -396,6 +388,9 @@ def show_workflow_status():
     
     print_info(f"\n📊 Checking workflow status untuk {len(targets)} repos...\n")
 
+    success_count = 0
+    failed_count = 0
+
     for i, target in enumerate(targets, 1):
         repo_path = target['repo']
         token = target['token']
@@ -410,9 +405,17 @@ def show_workflow_status():
         if result["success"] and result["output"]:
             for run in result["output"].strip().split("\n"):
                 print(f"  {run}")
+            success_count += 1
         elif not result["output"]:
              print("  ℹ️ No workflow runs found")
+             success_count += 1
         else:
             print_error(f"  ❌ Failed to fetch status: {result.get('error')}")
+            failed_count += 1
         print()
         time.sleep(1)
+
+    print_success(f"\n{'='*47}")
+    print_success(f"✅ Proses selesai!")
+    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {len(targets)}")
+    print_success(f"{'='*47}")
