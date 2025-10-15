@@ -113,16 +113,16 @@ def invoke_auto_accept():
 
     print_success(f"\nProses selesai! Invitation baru diterima: {accepted_count}")
 
-def get_user_repos_matching_pattern(username: str, token: str, repo_name: str) -> list:
+def get_user_repos_matching_pattern(token: str, repo_name: str) -> list:
     """
-    Mendapatkan semua repo user yang match dengan pattern repo_name atau repo_name-{number}.
+    Mendapatkan semua repo milik authenticated user yang match pattern.
     
     Returns:
         List of repo names yang match pattern
     """
-    # Gunakan per_page=100 untuk dapat lebih banyak repos sekaligus
+    # Gunakan user/repos untuk authenticated user dengan paginate
     result = run_gh_api(
-        f"api repos/{username} --paginate -q '.[].name'",
+        f"api user/repos --paginate -q '.[].name'",
         token,
         max_retries=2,
         timeout=60
@@ -133,7 +133,7 @@ def get_user_repos_matching_pattern(username: str, token: str, repo_name: str) -
         return []
     
     if not result["output"].strip():
-        print_warning("\n    ⚠️ No repos found in user account")
+        print_warning("\n    ⚠️ No repos found")
         return []
     
     matching_repos = []
@@ -146,7 +146,6 @@ def get_user_repos_matching_pattern(username: str, token: str, repo_name: str) -
     for line in lines:
         if not line.strip():
             continue
-        # Hapus quotes dan whitespace
         repo = line.strip().strip('"').strip("'")
         if pattern.match(repo):
             matching_repos.append(repo)
@@ -221,7 +220,7 @@ def force_cleanup_all_matching_repos(username: str, token: str, repo_name: str, 
     Returns:
         Jumlah repo yang berhasil dihapus
     """
-    matching_repos = get_user_repos_matching_pattern(username, token, repo_name)
+    matching_repos = get_user_repos_matching_pattern(token, repo_name)
     
     if not matching_repos:
         print_info("\n    ℹ️ No matching repos to clean")
