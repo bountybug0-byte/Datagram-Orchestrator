@@ -312,27 +312,45 @@ def invoke_auto_create_or_sync_fork():
             print_warning("⚠️  No valid fork")
             matching_repos = get_user_repos_matching_pattern(token, repo_name)
             
+            # ALWAYS prompt user untuk delete/create decision
             if matching_repos:
-                # Ada repo - prompt user
+                # Ada repo matching - show list
                 proceed = prompt_user_cleanup(username, matching_repos)
-                
-                if proceed:
-                    # y - cleanup + create
+            else:
+                # Ga ada repo - confirm create
+                print_info("\n    Tidak ada repo ditemukan.")
+                print_info("    Buat fork baru?")
+                while True:
+                    choice = input(f"    {Style.BOLD}[y/n]:{Style.ENDC} ").strip().lower()
+                    if choice == 'y':
+                        proceed = True
+                        break
+                    elif choice == 'n':
+                        proceed = False
+                        break
+                    else:
+                        print_warning("    Invalid input. Masukkan 'y' atau 'n'")
+            
+            if proceed:
+                # User pilih y
+                if matching_repos:
+                    # Cleanup dulu kalau ada
                     deleted, _ = cleanup_invalid_repos(username, token, matching_repos, source_repo)
-                    
                     if deleted > 0:
                         print_success(f"\n    ✅ Cleaned {deleted} repo(s)")
                         time.sleep(3)
-                    
-                    print_info("\n    🍴 Creating fork...")
-                    if create_new_fork(username, token, source_repo, fork_repo):
-                        create_count += 1
-                        success_count += 1
-                else:
-                    # n - skip cleanup, coba sync
-                    print_info("\n    ⏭️  Skipped cleanup")
+                
+                # Create fork baru
+                print_info("\n    🍴 Creating fork...")
+                if create_new_fork(username, token, source_repo, fork_repo):
+                    create_count += 1
+                    success_count += 1
+            else:
+                # User pilih n
+                print_info("\n    ⏭️  Skipped")
+                if matching_repos:
+                    # Coba sync repo pertama
                     first_repo = f"{username}/{matching_repos[0]}"
-                    
                     if sync_fork_with_upstream(first_repo, token):
                         print_success(f"    ✅ Synced: {matching_repos[0]}")
                         sync_count += 1
@@ -340,12 +358,9 @@ def invoke_auto_create_or_sync_fork():
                     else:
                         print_warning("    ⚠️  Sync failed")
                         skip_count += 1
-            else:
-                # No repo - create
-                print_info("\n    🍴 Creating fork...")
-                if create_new_fork(username, token, source_repo, fork_repo):
-                    create_count += 1
-                    success_count += 1
+                else:
+                    # Ga ada repo, skip count
+                    skip_count += 1
 
         time.sleep(2)
 
