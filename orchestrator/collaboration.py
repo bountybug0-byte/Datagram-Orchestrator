@@ -231,79 +231,6 @@ def create_new_fork(username: str, token: str, source_repo: str, fork_repo: str)
         return False
 
 
-def scan_all_users_status(users_to_process: Dict[str, str], repo_name: str, source_repo: str) -> Dict[str, dict]:
-    """Scan status semua user sebelum processing."""
-    print_info("\n🔍 Scanning all users...")
-    user_status = {}
-    
-    for i, (username, token) in enumerate(users_to_process.items(), 1):
-        print(f"[{i}/{len(users_to_process)}] Scanning @{username}...", end="", flush=True)
-        fork_repo = f"{username}/{repo_name}"
-        
-        is_valid = check_if_correct_fork(fork_repo, token, source_repo)
-        matching = get_user_repos_matching_pattern(token, repo_name)
-        
-        user_status[username] = {
-            'token': token,
-            'has_valid_fork': is_valid,
-            'matching_repos': matching
-        }
-        
-        if is_valid:
-            print_success(" ✅ Valid fork")
-        elif matching:
-            print_warning(f" ⚠️  {len(matching)} repo(s) found")
-        else:
-            print_info(" 📭 No repos")
-    
-    return user_status
-
-
-def show_scan_summary(user_status: Dict[str, dict]):
-    """Tampilkan summary hasil scan."""
-    valid_forks = [u for u, s in user_status.items() if s['has_valid_fork']]
-    need_cleanup = [u for u, s in user_status.items() if not s['has_valid_fork'] and s['matching_repos']]
-    need_create = [u for u, s in user_status.items() if not s['has_valid_fork'] and not s['matching_repos']]
-    
-    print(f"\n{'='*50}")
-    print_header("SCAN SUMMARY")
-    print_success(f"✅ Valid forks: {len(valid_forks)} users")
-    if valid_forks:
-        for u in valid_forks[:5]:
-            print(f"   • @{u}")
-        if len(valid_forks) > 5:
-            print(f"   ... and {len(valid_forks) - 5} more")
-    
-    print_warning(f"\n⚠️  Need cleanup: {len(need_cleanup)} users")
-    if need_cleanup:
-        for u in need_cleanup:
-            repos = user_status[u]['matching_repos']
-            print(f"   • @{u}: {len(repos)} repo(s)")
-    
-    print_info(f"\n📭 Need create: {len(need_create)} users")
-    if need_create:
-        for u in need_create[:5]:
-            print(f"   • @{u}")
-        if len(need_create) > 5:
-            print(f"   ... and {len(need_create) - 5} more")
-    
-    print('='*50)
-
-
-def prompt_global_action() -> str:
-    """Prompt aksi global untuk semua user."""
-    print_info("\n🤔 Pilih aksi:")
-    print(f"{Style.CYAN}  y{Style.ENDC} - Delete semua invalid repos & create fork baru untuk semua user")
-    print(f"{Style.CYAN}  n{Style.ENDC} - Skip cleanup, hanya sync valid forks")
-    print(f"{Style.CYAN}  q{Style.ENDC} - Quit/Cancel")
-    
-    while True:
-        choice = input(f"\n{Style.BOLD}[y/n/q]:{Style.ENDC} ").strip().lower()
-        if choice in ['y', 'n', 'q']:
-            return choice
-        print_warning("Invalid input. Masukkan 'y', 'n', atau 'q'")
-
-
 def invoke_auto_create_or_sync_fork():
     """Membuat atau sync fork untuk semua akun kolaborator."""
     print_header("8. AUTO CREATE OR SYNC FORK REPOSITORY")
@@ -364,7 +291,8 @@ def invoke_auto_create_or_sync_fork():
         
         fork_repo = f"{username}/{repo_name}"
         is_valid_fork = check_if_correct_fork(fork_repo, token, source_repo)
-            # Valid fork - selalu sync
+        
+        if is_valid_fork:
             print_success("✅ Valid fork")
             print_info("🔄 Syncing...")
             
@@ -380,14 +308,13 @@ def invoke_auto_create_or_sync_fork():
                 append_to_file(FORKED_REPOS_FILE, username)
             
             success_count += 1
-            
         else:
-            # No valid fork
+            matching_repos = get_user_repos_matching_pattern(token, repo_name)
+            
             if action == 'y':
-                # User pilih cleanup + create untuk SEMUA
-                if status['matching_repos']:
-                    print_warning(f"⚠️  Cleaning {len(status['matching_repos'])} repo(s)...")
-                    deleted, _ = cleanup_invalid_repos(username, token, status['matching_repos'], source_repo)
+                if matching_repos:
+                    print_warning(f"⚠️  Cleaning {len(matching_repos)} repo(s)...")
+                    deleted, _ = cleanup_invalid_repos(username, token, matching_repos, source_repo)
                     if deleted > 0:
                         print_success(f"✅ Cleaned {deleted} repo(s)")
                         time.sleep(3)
@@ -397,20 +324,19 @@ def invoke_auto_create_or_sync_fork():
                     create_count += 1
                     success_count += 1
             else:
-                # action == 'n' - skip cleanup
-                if status['matching_repos']:
-                    print_info("⏭️  Skipped cleanup, trying sync...")
-                    first_repo = f"{username}/{status['matching_repos'][0]}"
+                if matching_repos:
+                    print_info("⏭️  Trying sync...")
+                    first_repo = f"{username}/{matching_repos[0]}"
                     
                     if sync_fork_with_upstream(first_repo, token):
-                        print_success(f"✅ Synced: {status['matching_repos'][0]}")
+                        print_success(f"✅ Synced: {matching_repos[0]}")
                         sync_count += 1
                         success_count += 1
                     else:
                         print_warning("⚠️  Sync failed")
                         skip_count += 1
                 else:
-                    print_info("⏭️  Skipped (no repos to sync)")
+                    print_info("⏭️  Skipped (no repos)")
                     skip_count += 1
         
         time.sleep(2)
