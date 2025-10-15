@@ -13,10 +13,8 @@ on:
         required: false
         type: boolean
         default: true
-  
   schedule:
     - cron: '0 */5 * * *'
-  
   push:
     branches: [ main ]
     paths:
@@ -32,9 +30,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ============================================
-  # JOB 1: Setup Matrix from Secret (ENHANCED)
-  # ============================================
   setup-matrix:
     name: 🔧 Setup Multi-Account Matrix
     runs-on: ubuntu-latest
@@ -42,17 +37,14 @@ jobs:
       matrix: ${{ steps.parse.outputs.matrix }}
       total: ${{ steps.parse.outputs.total }}
       timestamp: ${{ steps.parse.outputs.timestamp }}
-    
     steps:
       - name: Parse API Keys
         id: parse
         run: |
-          set -euo pipefail  # Exit on error, undefined vars, pipe failures
-          
+          set -euo pipefail
           echo "🔍 Parsing DATAGRAM_API_KEYS secret..."
           echo "════════════════════════════════════════════════"
           
-          # Check if secret exists
           if [ -z "${DATAGRAM_API_KEYS:-}" ]; then
             echo "❌ CRITICAL ERROR: DATAGRAM_API_KEYS secret is NOT SET!"
             echo ""
@@ -69,50 +61,37 @@ jobs:
           
           KEYS="${DATAGRAM_API_KEYS}"
           
-          # Debug: Show first/last chars (safe)
           KEY_LENGTH=${#KEYS}
           echo "✅ Secret found (length: $KEY_LENGTH chars)"
-          
           if [ "${{ inputs.debug_mode || 'true' }}" == "true" ]; then
             echo "🐛 DEBUG: First 10 chars: ${KEYS:0:10}..."
             echo "🐛 DEBUG: Last 10 chars: ...${KEYS: -10}"
           fi
           
-          # Detect and normalize format
           if [[ "$KEYS" == "["* ]]; then
             echo "📦 Detected format: JSON Array"
             KEYS_ARRAY="$KEYS"
-            
-            # Validate JSON
             if ! echo "$KEYS_ARRAY" | jq empty 2>/dev/null; then
               echo "❌ ERROR: Invalid JSON format!"
               echo "🐛 Raw content (first 200 chars): ${KEYS:0:200}"
               exit 1
             fi
-            
           else
             echo "📦 Detected format: Newline/Comma separated"
-            
-            # Convert to JSON array (handle both newlines and commas)
             KEYS_ARRAY=$(echo "$KEYS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(length > 0))')
-            
             if [ "${{ inputs.debug_mode || 'true' }}" == "true" ]; then
               echo "🐛 DEBUG: Converted to JSON: $KEYS_ARRAY"
             fi
           fi
           
-          # Count keys
           COUNT=$(echo "$KEYS_ARRAY" | jq 'length')
-          
           if [ "$COUNT" -eq 0 ]; then
             echo "❌ ERROR: No valid API keys found after parsing!"
             echo "🐛 Parsed array: $KEYS_ARRAY"
             exit 1
           fi
-          
           echo "✅ Found $COUNT valid API key(s)"
           
-          # Generate matrix with validation
           MATRIX=$(jq -n --argjson keys "$KEYS_ARRAY" '{
             include: [
               range(0; $keys | length) | {
@@ -122,7 +101,6 @@ jobs:
             ]
           }')
           
-          # Validate matrix structure
           if ! echo "$MATRIX" | jq '.include | length' &>/dev/null; then
             echo "❌ ERROR: Invalid matrix structure generated!"
             echo "🐛 Matrix: $MATRIX"
@@ -131,11 +109,9 @@ jobs:
           
           TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           
-          # Output to GitHub Actions (escape for multiline JSON)
           echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
           echo "$MATRIX" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
-          
           echo "total=$COUNT" >> "$GITHUB_OUTPUT"
           echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
           
@@ -152,10 +128,8 @@ jobs:
           echo "════════════════════════════════════════════════"
           echo "📊 MATRIX VALIDATION"
           echo "════════════════════════════════════════════════"
-          
           MATRIX='${{ steps.parse.outputs.matrix }}'
           TOTAL='${{ steps.parse.outputs.total }}'
-          
           echo "📋 Generated Matrix:"
           echo "$MATRIX" | jq '.'
           echo ""
@@ -163,30 +137,24 @@ jobs:
           echo "⏰ Timestamp: ${{ steps.parse.outputs.timestamp }}"
           echo ""
           
-          # Validate each node
           echo "🔍 Validating node configurations..."
           NODE_COUNT=$(echo "$MATRIX" | jq '.include | length')
-          
           if [ "$NODE_COUNT" -ne "$TOTAL" ]; then
             echo "❌ ERROR: Mismatch between matrix length ($NODE_COUNT) and total ($TOTAL)"
             exit 1
           fi
           
-          # Check if all nodes have required fields
           for i in $(seq 0 $((NODE_COUNT - 1))); do
             INDEX=$(echo "$MATRIX" | jq -r ".include[$i].index")
             KEY_PREVIEW=$(echo "$MATRIX" | jq -r ".include[$i].api_key" | head -c 10)
-            
             if [ -z "$INDEX" ] || [ "$INDEX" == "null" ]; then
               echo "❌ ERROR: Node $i missing index"
               exit 1
             fi
-            
             if [ -z "$KEY_PREVIEW" ] || [ "$KEY_PREVIEW" == "null" ]; then
               echo "❌ ERROR: Node $i missing api_key"
               exit 1
             fi
-            
             echo "  ✓ Node #$INDEX configured (key: ${KEY_PREVIEW}...)"
           done
           
@@ -194,33 +162,28 @@ jobs:
           echo "✅ All nodes validated successfully!"
           echo "════════════════════════════════════════════════"
 
-  # ============================================
-  # JOB 2: Run Datagram Nodes (Parallel)
-  # ============================================
   run-nodes:
     name: 🚀 Node #${{ matrix.index }}
     needs: setup-matrix
     runs-on: ubuntu-latest
     timeout-minutes: 350
-    
     strategy:
       max-parallel: 50
       fail-fast: false
       matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
-    
     steps:
       - name: 🖥️ System Info
         run: |
           echo "════════════════════════════════════════════════"
           echo "🚀 DATAGRAM NODE STARTUP"
           echo "════════════════════════════════════════════════"
-          echo "📍 Node Index    : ${{ matrix.index }} / ${{ needs.setup-matrix.outputs.total }}"
-          echo "⏰ Started at    : ${{ needs.setup-matrix.outputs.timestamp }}"
-          echo "🔑 API Key       : ${API_KEY:0:8}...${API_KEY: -6}"
-          echo "🖥️ Runner        : $(hostname)"
-          echo "🌐 Public IP     : $(curl -s ifconfig.me || echo 'N/A')"
-          echo "💾 Disk Space    : $(df -h / | awk 'NR==2 {print $4}') available"
-          echo "🧠 Memory        : $(free -h | awk 'NR==2 {print $7}') available"
+          echo "📍 Node Index : ${{ matrix.index }} / ${{ needs.setup-matrix.outputs.total }}"
+          echo "⏰ Started at : ${{ needs.setup-matrix.outputs.timestamp }}"
+          echo "🔑 API Key    : ${API_KEY:0:8}...${API_KEY: -6}"
+          echo "🖥️ Runner     : $(hostname)"
+          echo "🌐 Public IP  : $(curl -s ifconfig.me || echo 'N/A')"
+          echo "💾 Disk Space : $(df -h / | awk 'NR==2 {print $4}') available"
+          echo "🧠 Memory     : $(free -h | awk 'NR==2 {print $7}') available"
           echo "════════════════════════════════════════════════"
         env:
           API_KEY: ${{ matrix.api_key }}
@@ -228,9 +191,7 @@ jobs:
       - name: 📦 Install Datagram CLI
         run: |
           set -euo pipefail
-          
           echo "📥 Downloading Datagram CLI..."
-          
           DOWNLOAD_URL="https://github.com/Datagram-Group/datagram-cli-release/releases/latest/download/datagram-cli-x86_64-linux"
           MAX_RETRIES=3
           RETRY_COUNT=0
@@ -251,11 +212,9 @@ jobs:
             fi
           done
           
-          # Install
           sudo mv datagram-cli /usr/local/bin/datagram-cli
           sudo chmod +x /usr/local/bin/datagram-cli
           
-          # Verify installation
           if command -v datagram-cli &> /dev/null; then
             echo "✅ Datagram CLI installed successfully"
             datagram-cli --version 2>/dev/null || echo "📦 Version: latest"
@@ -267,22 +226,18 @@ jobs:
       - name: 🚀 Start Node with Auto-Restart
         run: |
           set -euo pipefail
-          
           echo "🎯 Starting Datagram Node #${{ matrix.index }}..."
           
-          # Cleanup function
           cleanup() {
             echo ""
             echo "═══════════════════════════════════════════════"
-            echo "⚠️  SHUTDOWN SIGNAL RECEIVED"
+            echo "⚠️ SHUTDOWN SIGNAL RECEIVED"
             echo "═══════════════════════════════════════════════"
             echo "⏰ Time: $(date '+%Y-%m-%d %H:%M:%S')"
             echo "🛑 Stopping node gracefully..."
-            
             pkill -TERM -f datagram-cli 2>/dev/null || true
             sleep 5
             pkill -KILL -f datagram-cli 2>/dev/null || true
-            
             echo "✅ Node stopped"
             echo "═══════════════════════════════════════════════"
             exit 0
@@ -296,11 +251,11 @@ jobs:
           while [ $RESTART_COUNT -lt $MAX_RETRIES ]; do
             echo ""
             echo "╔═══════════════════════════════════════════════╗"
-            printf "║      ITERATION #%-3d of %-3d                  ║\n" $((RESTART_COUNT + 1)) "$MAX_RETRIES"
+            printf "║ ITERATION #%-3d of %-3d                        ║\n" $((RESTART_COUNT + 1)) "$MAX_RETRIES"
             echo "╚═══════════════════════════════════════════════╝"
-            echo "⏰ Timestamp   : $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "⏰ Timestamp  : $(date '+%Y-%m-%d %H:%M:%S')"
             echo "📊 Total Runtime: $((TOTAL_RUNTIME / 3600))h $((TOTAL_RUNTIME % 3600 / 60))m"
-            echo "▶️  Starting datagram-cli..."
+            echo "▶️ Starting datagram-cli..."
             echo "───────────────────────────────────────────────"
             
             START_TIME=$(date +%s)
@@ -314,17 +269,17 @@ jobs:
               TOTAL_RUNTIME=$((TOTAL_RUNTIME + ITERATION_RUNTIME))
               
               echo "───────────────────────────────────────────────"
-              echo "⚠️  Node stopped with exit code: $EXIT_CODE"
-              echo "⏱️  Iteration runtime: $((ITERATION_RUNTIME / 60))m $((ITERATION_RUNTIME % 60))s"
+              echo "⚠️ Node stopped with exit code: $EXIT_CODE"
+              echo "⏱️ Iteration runtime: $((ITERATION_RUNTIME / 60))m $((ITERATION_RUNTIME % 60))s"
               
               case $EXIT_CODE in
-                124) 
-                  echo "⏱️  Timeout reached (expected for periodic restart)"
+                124)
+                  echo "⏱️ Timeout reached (expected for periodic restart)"
                   ;;
-                0) 
+                0)
                   echo "✅ Clean exit"
                   ;;
-                *) 
+                *)
                   echo "❌ Unexpected exit. Waiting 30s before retry..."
                   sleep 30
                   ;;
@@ -349,35 +304,31 @@ jobs:
           API_KEY: ${{ matrix.api_key }}
           MAX_RETRIES: ${{ env.MAX_RETRIES }}
           RESTART_DELAY: ${{ env.RESTART_DELAY }}
-  
-  # ============================================
-  # JOB 3: Health Monitor
-  # ============================================
+
   monitor:
     name: 📊 Health Monitor
     needs: [setup-matrix, run-nodes]
     runs-on: ubuntu-latest
     if: always()
-    
     steps:
       - name: Generate Report
         run: |
           echo "╔═══════════════════════════════════════════════╗"
-          echo "║      DATAGRAM NODES HEALTH REPORT            ║"
+          echo "║      DATAGRAM NODES HEALTH REPORT             ║"
           echo "╚═══════════════════════════════════════════════╝"
           echo ""
           echo "📊 Workflow Summary:"
           echo "───────────────────────────────────────────────"
-          echo "🔢 Total Nodes     : ${{ needs.setup-matrix.outputs.total }}"
-          echo "📅 Started at      : ${{ needs.setup-matrix.outputs.timestamp }}"
-          echo "⏰ Finished at     : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "🔢 Total Nodes : ${{ needs.setup-matrix.outputs.total }}"
+          echo "📅 Started at  : ${{ needs.setup-matrix.outputs.timestamp }}"
+          echo "⏰ Finished at : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo ""
           echo "📈 Job Results:"
           echo "───────────────────────────────────────────────"
-          echo "✅ Success         : ${{ needs.run-nodes.result == 'success' }}"
-          echo "❌ Failure         : ${{ needs.run-nodes.result == 'failure' }}"
-          echo "⚠️  Cancelled      : ${{ needs.run-nodes.result == 'cancelled' }}"
-          echo "⏭️  Skipped        : ${{ needs.run-nodes.result == 'skipped' }}"
+          echo "✅ Success    : ${{ needs.run-nodes.result == 'success' }}"
+          echo "❌ Failure    : ${{ needs.run-nodes.result == 'failure' }}"
+          echo "⚠️ Cancelled  : ${{ needs.run-nodes.result == 'cancelled' }}"
+          echo "⏭️ Skipped    : ${{ needs.run-nodes.result == 'skipped' }}"
           echo ""
           echo "═══════════════════════════════════════════════"
           
@@ -392,9 +343,9 @@ jobs:
             echo "   • CLI download failures"
             exit 1
           elif [ "${{ needs.run-nodes.result }}" == "cancelled" ]; then
-            echo "⚠️  Workflow was cancelled manually."
+            echo "⚠️ Workflow was cancelled manually."
             exit 0
           else
-            echo "ℹ️  Workflow status: ${{ needs.run-nodes.result }}"
+            echo "ℹ️ Workflow status: ${{ needs.run-nodes.result }}"
             exit 0
           fi
