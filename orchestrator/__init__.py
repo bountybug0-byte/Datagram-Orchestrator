@@ -1,4 +1,3 @@
-# File: orchestrator/__init__.py
 """
 Datagram Orchestrator v3.2
 Multi-account automation toolkit for Datagram CLI deployment.
