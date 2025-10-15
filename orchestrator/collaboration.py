@@ -350,21 +350,20 @@ def invoke_auto_create_or_sync_fork():
     
     # PROCESSING
     print(f"\n{'='*50}")
-    print_header("PROCESSING")
+    print_info("PROCESSING...")
+    print('='*50)
     
     success_count = 0
     sync_count = 0
     create_count = 0
     skip_count = 0
     
-    for i, (username, status) in enumerate(user_status.items(), 1):
-        print(f"\n[{i}/{len(user_status)}] @{username}")
+    for i, (username, token) in enumerate(users_to_process.items(), 1):
+        print(f"\n[{i}/{len(users_to_process)}] @{username}")
         print('-'*50)
         
-        token = status['token']
         fork_repo = f"{username}/{repo_name}"
-        
-        if status['has_valid_fork']:
+        is_valid_fork = check_if_correct_fork(fork_repo, token, source_repo)
             # Valid fork - selalu sync
             print_success("✅ Valid fork")
             print_info("🔄 Syncing...")
@@ -420,7 +419,7 @@ def invoke_auto_create_or_sync_fork():
     print(f"\n{'='*50}")
     print_success("✅ COMPLETE")
     print('='*50)
-    print_info(f"Total: {len(user_status)}")
+    print_info(f"Total: {len(users_to_process)}")
     print_success(f"Success: {success_count}")
     print_info(f"  Synced: {sync_count} | Created: {create_count}")
     if skip_count > 0:
