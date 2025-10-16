@@ -16,7 +16,6 @@ from .helpers import (
     read_file_lines,
     append_to_file,
     load_json_file,
-    disable_workflow,
     CONFIG_FILE,
     TOKEN_CACHE_FILE,
     INVITED_USERS_FILE,
@@ -48,6 +47,10 @@ def invoke_auto_invite():
 
     if not users_to_invite:
         print_success("✅ Semua akun sudah diundang.")
+        print_success(f"\n{'='*47}")
+        print_success(f"✅ Proses selesai!")
+        print_info(f"   Berhasil: 0, Gagal: 0, Total: {total_accounts}")
+        print_success(f"{'='*47}")
         return
 
     print_info(f"Akan mengundang {len(users_to_invite)} user baru...")
@@ -72,7 +75,7 @@ def invoke_auto_invite():
 
     print_success(f"\n{'='*47}")
     print_success(f"✅ Proses selesai!")
-    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {len(users_to_invite)}")
+    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {total_accounts}")
     print_success(f"{'='*47}")
 
 
@@ -107,6 +110,7 @@ def invoke_auto_accept():
 
         if not result["success"]:
             print_error(f" ❌ Gagal fetch invitations")
+            skipped_count += 1
             continue
 
         try:
@@ -124,17 +128,19 @@ def invoke_auto_accept():
                     accepted_count += 1
                 else:
                     print_error(f" ❌ Gagal accept: {accept_result['error']}")
+                    skipped_count += 1
             else:
                 print_info(" ℹ️ No invitation found")
                 skipped_count += 1
         except (json.JSONDecodeError, KeyError):
             print_error(f" ❌ Gagal parse JSON")
+            skipped_count += 1
 
         time.sleep(1)
 
     print_success(f"\n{'='*47}")
     print_success(f"✅ Proses selesai!")
-    print_info(f"   Berhasil: {accepted_count}, Dilewati: {skipped_count}, Total: {len(token_cache)}")
+    print_info(f"   Berhasil: {accepted_count}, Dilewati: {skipped_count}, Total: {total_accounts}")
     print_success(f"{'='*47}")
 
 
@@ -191,11 +197,6 @@ def delete_repository(repo_path: str, token: str) -> bool:
 def sync_fork_with_upstream(fork_repo: str, token: str) -> bool:
     """Sinkronisasi fork dengan upstream."""
     default_branch = get_default_branch(fork_repo, token)
-    
-    # Disable workflow before sync
-    print_info("🔒 Disabling workflow before sync...")
-    disable_workflow(fork_repo, token, "datagram-runner.yml")
-    time.sleep(2)
     
     sync_result = run_gh_api(f"api -X POST repos/{fork_repo}/merge-upstream -f branch={default_branch}", token, max_retries=2)
     
@@ -262,10 +263,6 @@ def create_new_fork(username: str, token: str, source_repo: str, fork_repo: str)
         print_success("    ✅ Fork created")
         time.sleep(5)
         
-        # Disable workflow on newly created fork
-        print_info("    🔒 Disabling workflow on new fork...")
-        disable_workflow(fork_repo, token, "datagram-runner.yml")
-        
         if set_repo_public(fork_repo, token):
             print_info("    🔓 Set public")
         
@@ -303,6 +300,10 @@ def invoke_auto_create_or_sync_fork():
 
     if not users_to_process:
         print_success("✅ Tidak ada akun untuk diproses.")
+        print_success(f"\n{'='*47}")
+        print_success(f"✅ Proses selesai!")
+        print_info(f"   Berhasil: 0, Dilewati: 0, Total: {total_accounts}")
+        print_success(f"{'='*47}")
         return
 
     print_info(f"Source: {source_repo}")
@@ -355,6 +356,8 @@ def invoke_auto_create_or_sync_fork():
                 if create_new_fork(username, token, source_repo, fork_repo):
                     create_count += 1
                     success_count += 1
+                else:
+                    skip_count += 1
             else:
                 print_info("🔄 Syncing...")
                 if sync_fork_with_upstream(fork_repo, token):
@@ -384,6 +387,8 @@ def invoke_auto_create_or_sync_fork():
                 if create_new_fork(username, token, source_repo, fork_repo):
                     create_count += 1
                     success_count += 1
+                else:
+                    skip_count += 1
             else:
                 if matching_repos:
                     print_info("🔍 Checking repos...")
@@ -410,16 +415,20 @@ def invoke_auto_create_or_sync_fork():
                         if create_new_fork(username, token, source_repo, fork_repo):
                             create_count += 1
                             success_count += 1
+                        else:
+                            skip_count += 1
                 else:
                     print_info("🍴 Creating new fork...")
                     if create_new_fork(username, token, source_repo, fork_repo):
                         create_count += 1
                         success_count += 1
+                    else:
+                        skip_count += 1
         
         time.sleep(2)
     
     print(f"\n{'='*50}")
     print_success("✅ Proses selesai!")
-    print_info(f"   Berhasil: {success_count}, Dilewati: {skip_count}, Total: {len(users_to_process)}")
+    print_info(f"   Berhasil: {success_count}, Dilewati: {skip_count}, Total: {total_accounts}")
     print_info(f"   Synced: {sync_count} | Created: {create_count}")
     print('='*50)
