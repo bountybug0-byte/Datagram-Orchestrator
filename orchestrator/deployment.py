@@ -16,8 +16,8 @@ from .helpers import (
     append_to_file,
     load_json_file,
     run_command,
-    disable_workflow,
     enable_workflow,
+    disable_workflow,
     CONFIG_FILE,
     TOKEN_CACHE_FILE,
     FORKED_REPOS_FILE,
@@ -31,9 +31,6 @@ def enable_actions_on_repo(repo_path: str, token: str) -> bool:
     """Mengaktifkan GitHub Actions pada repositori menggunakan metode file input."""
     print_info("🔧 Enabling GitHub Actions on repository...")
     
-    # PERBAIKAN FINAL: Membuat file JSON sementara untuk payload.
-    # Ini adalah cara paling robust untuk mengirim data boolean dan
-    # menghindari masalah parsing oleh shell.
     payload = {
         "enabled": True,
         "allowed_actions": "all"
@@ -41,17 +38,14 @@ def enable_actions_on_repo(repo_path: str, token: str) -> bool:
     
     temp_file_path = None
     try:
-        # Buat file sementara dan tulis payload JSON
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump(payload, f)
             temp_file_path = f.name
 
-        # Gunakan flag --input untuk membaca payload dari file
         cmd = f'api -X PUT repos/{repo_path}/actions/permissions --input "{temp_file_path}"'
         result = run_gh_api(cmd, token, timeout=30)
         
     finally:
-        # Pastikan file sementara selalu dihapus
         if temp_file_path and Path(temp_file_path).exists():
             Path(temp_file_path).unlink()
 
@@ -140,12 +134,10 @@ def deploy_to_github():
                 workflow_dir = temp_dir / ".github" / "workflows"
                 workflow_dir.mkdir(parents=True, exist_ok=True)
                 
-                # Cek apakah file workflow sudah ada dan sama
                 workflow_target_path = workflow_dir / workflow_file
                 if workflow_target_path.exists() and workflow_target_path.read_text(encoding='utf-8') == workflow_content:
                     print_info("ℹ️  Workflow file is already up to date.")
                     success_count += 1
-                    # Workflow mungkin dinonaktifkan, jadi kita tetap enable
                     enable_workflow(repo_path, token, workflow_file)
                     continue
 
@@ -157,17 +149,12 @@ def deploy_to_github():
                 run_command("git config user.email 'bot@datagram.local'", cwd=temp_dir)
                 run_command(f"git add .github/workflows/{workflow_file}", cwd=temp_dir)
                 
-                # Hanya commit jika ada perubahan
                 commit_result = run_command('git commit -m "Deploy/Update Datagram workflow"', cwd=temp_dir)
                 if "nothing to commit" in commit_result.stdout.lower() or "no changes" in commit_result.stdout.lower():
                      print_info("ℹ️ No changes to commit.")
                      success_count += 1
                      enable_workflow(repo_path, token, workflow_file)
                      continue
-
-                print_info("🔒 Disabling workflow before push...")
-                disable_workflow(repo_path, token, workflow_file)
-                time.sleep(2)
 
                 push_result = run_command(f"git push", cwd=temp_dir, timeout=120)
                 if push_result.returncode == 0:
@@ -184,14 +171,12 @@ def deploy_to_github():
 
     print_success(f"\n{'='*47}")
     print_success(f"✅ Deployment selesai!")
-    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {len(targets)}")
+    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {total_accounts}")
     print_success(f"{'='*47}")
 
-# ... (sisa fungsi di deployment.py tetap sama) ...
+
 def wait_for_workflow_completion(repo_path: str, token: str, run_id: int, timeout: int = 21600) -> bool:
-    """
-    Menunggu hingga workflow run selesai (completed).
-    """
+    """Menunggu hingga workflow run selesai (completed)."""
     start_time = time.time()
     poll_interval = 30
     
@@ -377,7 +362,7 @@ def invoke_workflow_trigger():
 
     print_success(f"\n{'='*50}")
     print_success(f"✅ Proses selesai!")
-    print_info(f"   Berhasil: {success_count}, Gagal/Dilewati: {failed_count}, Total: {len(targets)}")
+    print_info(f"   Berhasil: {success_count}, Gagal/Dilewati: {failed_count}, Total: {total_accounts}")
     print_success('='*50)
 
 
@@ -445,5 +430,5 @@ def show_workflow_status():
 
     print_success(f"\n{'='*47}")
     print_success(f"✅ Proses selesai!")
-    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {len(targets)}")
+    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {total_accounts}")
     print_success(f"{'='*47}")
