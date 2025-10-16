@@ -147,5 +147,5 @@ def invoke_auto_set_secrets():
 
     print_success(f"\n{'='*47}")
     print_success(f"✅ Proses selesai!")
-    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {len(targets)}")
+    print_info(f"   Berhasil: {success_count}, Gagal: {failed_count}, Total: {total_accounts}")
     print_success(f"{'='*47}")

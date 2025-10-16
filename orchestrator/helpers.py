@@ -127,7 +127,6 @@ def check_dependencies():
     print_success("\n✅ Semua dependensi terpenuhi!\n")
 
 def run_command(command: str, env: Optional[Dict[str, str]] = None, timeout: int = 30, cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
-    # Replace gh with full path if needed
     if command.strip().startswith("gh "):
         if not GH_EXECUTABLE:
             raise FileNotFoundError("GitHub CLI (gh) tidak ditemukan di PATH sistem atau lokasi standar.")
@@ -156,23 +155,6 @@ def run_command(command: str, env: Optional[Dict[str, str]] = None, timeout: int
         raise
 
 def run_gh_api(command: str, token: str, max_retries: int = 3, timeout: int = 30) -> Dict[str, Any]:
-    """
-    Execute gh CLI command with proper token handling.
-    Supports both shell commands and direct API calls.
-    """
-    # Detect if command uses --jq and replace with raw JSON
-    use_manual_jq = False
-    jq_pattern = None
-    
-    if '--jq' in command:
-        # Extract jq pattern and remove from command
-        jq_match = re.search(r"--jq\s+['\"](.+?)['\"]", command)
-        if jq_match:
-            jq_pattern = jq_match.group(1)
-            # Remove --jq argument from command
-            command = re.sub(r"--jq\s+['\"].+?['\"]", "", command)
-            use_manual_jq = True
-    
     full_command = f"gh {command}"
     
     for attempt in range(max_retries):
@@ -180,29 +162,7 @@ def run_gh_api(command: str, token: str, max_retries: int = 3, timeout: int = 30
             result = run_command(full_command, env={"GH_TOKEN": token}, timeout=timeout)
             
             if result.returncode == 0:
-                output = result.stdout.strip()
-                
-                # Manual jq processing if needed
-                if use_manual_jq and jq_pattern and output:
-                    try:
-                        data = json.loads(output)
-                        # Handle common jq patterns
-                        if jq_pattern == '.[].name':
-                            if isinstance(data, list):
-                                output = '\n'.join(item.get('name', '') for item in data if isinstance(item, dict))
-                        elif jq_pattern == '.default_branch':
-                            output = data.get('default_branch', 'main')
-                        elif jq_pattern == '.parent.full_name':
-                            parent = data.get('parent', {})
-                            output = parent.get('full_name', '') if parent else ''
-                        elif jq_pattern.startswith('{') or jq_pattern.startswith('['):
-                            # Complex jq patterns - return raw JSON
-                            pass
-                    except (json.JSONDecodeError, KeyError, AttributeError):
-                        # If manual parsing fails, return raw output
-                        pass
-                
-                return {"success": True, "output": output, "error": None}
+                return {"success": True, "output": result.stdout.strip(), "error": None}
             
             stderr = result.stderr.lower()
             if any(k in stderr for k in ["timeout", "connection", "network"]) and attempt < max_retries - 1:
@@ -270,20 +230,7 @@ def save_json_file(file_path: Path, data: Dict):
 def validate_api_key_format(key: str) -> bool:
     return bool(key and len(key) > 10 and not key.isspace())
 
-def remove_line_from_file(file_path: Path, line_to_remove: str):
-    """Remove specific line from file"""
-    if not file_path.exists():
-        return
-    try:
-        lines = read_file_lines(file_path)
-        filtered_lines = [line for line in lines if line != line_to_remove]
-        file_path.write_text("\n".join(filtered_lines) + "\n" if filtered_lines else "", encoding="utf-8")
-    except Exception as e:
-        write_log(f"Error removing line from {file_path}: {str(e)}")
-        raise
-
 def get_workflow_id(repo_path: str, token: str, workflow_file: str) -> Optional[int]:
-    """Get workflow ID by workflow filename."""
     result = run_gh_api(f"api repos/{repo_path}/actions/workflows", token, timeout=60)
     if not result["success"]:
         write_log(f"Failed to list workflows for {repo_path}: {result.get('error')}")
@@ -300,11 +247,11 @@ def get_workflow_id(repo_path: str, token: str, workflow_file: str) -> Optional[
         return None
 
 def disable_workflow(repo_path: str, token: str, workflow_file: str) -> bool:
-    """Disable a workflow in the repository."""
     workflow_id = get_workflow_id(repo_path, token, workflow_file)
     if not workflow_id:
-        write_log(f"Workflow '{workflow_file}' not found in {repo_path}")
-        return False
+        # Pesan ini penting: jika workflow belum ada (misal, repo baru), ini bukan error.
+        write_log(f"Workflow '{workflow_file}' not found in {repo_path}, cannot disable.")
+        return True # Mengembalikan True agar proses tidak berhenti
     
     result = run_gh_api(
         f"api -X PUT repos/{repo_path}/actions/workflows/{workflow_id}/disable",
@@ -325,10 +272,9 @@ def disable_workflow(repo_path: str, token: str, workflow_file: str) -> bool:
     return False
 
 def enable_workflow(repo_path: str, token: str, workflow_file: str) -> bool:
-    """Enable a workflow in the repository."""
     workflow_id = get_workflow_id(repo_path, token, workflow_file)
     if not workflow_id:
-        write_log(f"Workflow '{workflow_file}' not found in {repo_path}")
+        write_log(f"Workflow '{workflow_file}' not found in {repo_path}, cannot enable.")
         return False
     
     result = run_gh_api(
